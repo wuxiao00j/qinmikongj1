@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: couplespace-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: couplespace
+      POSTGRES_USER: couplespace
+      POSTGRES_PASSWORD: couplespace
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U couplespace -d couplespace"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

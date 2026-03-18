@@ -1,0 +1,205 @@
+{
+  "accounts": [
+    {
+      "accountId": "acct-real-alex",
+      "displayName": "Alex",
+      "providerName": "Couple Space ID",
+      "accountHint": "alex@demo.local",
+      "password": "couplespace",
+      "accessToken": "demo-token-alex",
+      "currentUserId": "user-alex",
+      "partnerUserId": "user-jamie",
+      "spaceIds": [
+        "space-demo-couple",
+        "space-local-demo"
+      ]
+    },
+    {
+      "accountId": "acct-real-jamie",
+      "displayName": "Jamie",
+      "providerName": "Couple Space ID",
+      "accountHint": "jamie@demo.local",
+      "password": "couplespace",
+      "accessToken": "demo-token-jamie",
+      "currentUserId": "user-jamie",
+      "partnerUserId": "user-alex",
+      "spaceIds": [
+        "space-demo-couple",
+        "space-local-demo"
+      ]
+    },
+    {
+      "accountId": "acct-real-riley",
+      "displayName": "Riley",
+      "providerName": "Couple Space ID",
+      "accountHint": "riley@demo.local",
+      "password": "couplespace",
+      "accessToken": "demo-token-riley",
+      "currentUserId": "user-riley",
+      "partnerUserId": null,
+      "spaceIds": []
+    },
+    {
+      "accountId": "acct-real-morgan",
+      "displayName": "Morgan",
+      "providerName": "Couple Space ID",
+      "accountHint": "morgan@demo.local",
+      "password": "couplespace",
+      "accessToken": "demo-token-morgan",
+      "currentUserId": "user-morgan",
+      "partnerUserId": null,
+      "spaceIds": []
+    },
+    {
+      "accountId": "acct-real-taylor",
+      "displayName": "Taylor",
+      "providerName": "Couple Space ID",
+      "accountHint": "taylor@demo.local",
+      "password": "couplespace",
+      "accessToken": "demo-token-taylor",
+      "currentUserId": "user-taylor",
+      "partnerUserId": null,
+      "spaceIds": []
+    },
+    {
+      "accountId": "acct-real-avery",
+      "displayName": "Avery",
+      "providerName": "Couple Space ID",
+      "accountHint": "avery@demo.local",
+      "password": "couplespace",
+      "accessToken": "demo-token-avery",
+      "currentUserId": "user-avery",
+      "partnerUserId": null,
+      "spaceIds": []
+    }
+  ],
+  "spaces": {
+    "space-demo-couple": {
+      "memberAccountIds": [
+        "acct-real-alex",
+        "acct-real-jamie"
+      ],
+      "snapshot": {
+        "snapshotId": "snapshot-space-demo-couple-seed",
+        "relationStatus": "paired",
+        "updatedAt": "2026-03-17T08:30:00Z",
+        "lastUpdatedByAccountId": "acct-real-alex",
+        "memories": [
+          {
+            "id": "2d3005ca-2a75-4ec6-b8bf-f6675236bf24",
+            "title": "一起去江边散步",
+            "detail": "晚饭后沿着江边慢慢走了一圈，风很轻，回家路上顺手买了热可可。",
+            "date": "2026-03-16T12:00:00Z",
+            "categoryRawValue": "日常",
+            "imageLabel": "夜晚散步",
+            "mood": "放松",
+            "location": "江边步道",
+            "weather": "微风",
+            "isFeatured": true,
+            "spaceId": "space-demo-couple",
+            "createdByUserId": "user-jamie",
+            "createdAt": "2026-03-16T12:00:00Z",
+            "updatedAt": "2026-03-16T12:00:00Z",
+            "syncStatusRawValue": "synced"
+          }
+        ],
+        "wishes": [
+          {
+            "id": "a3046b1f-bbaf-49ab-aa2d-3cf289114712",
+            "title": "周末去看海",
+            "detail": "找一个离城市不太远的海边住一晚，看日落。",
+            "note": "如果天气好就这个月出发。",
+            "categoryRawValue": "旅行",
+            "statusRawValue": "计划中",
+            "targetText": "这个月",
+            "symbol": "tram.fill",
+            "spaceId": "space-demo-couple",
+            "createdByUserId": "user-alex",
+            "createdAt": "2026-03-10T09:00:00Z",
+            "updatedAt": "2026-03-16T12:00:00Z",
+            "syncStatusRawValue": "synced"
+          }
+        ],
+        "anniversaries": [
+          {
+            "id": "f56c6be8-2471-446f-9ca0-f108502a9f6d",
+            "title": "第一次一起旅行",
+            "date": "2025-09-18T00:00:00Z",
+            "categoryRawValue": "自定义",
+            "note": "想把这天每年都记住。",
+            "cadenceRawValue": "yearly",
+            "spaceId": "space-demo-couple",
+            "createdByUserId": "user-alex",
+            "createdAt": "2025-09-18T00:00:00Z",
+            "updatedAt": "2026-03-16T12:00:00Z",
+            "syncStatusRawValue": "synced"
+          }
+        ]
+      }
+    },
+    "space-local-demo": {
+      "isActive": false,
+      "memberAccountIds": [
+        "acct-real-alex",
+        "acct-real-jamie"
+      ],
+      "snapshot": {
+        "snapshotId": "snapshot-space-local-demo-seed",
+        "relationStatus": "paired",
+        "updatedAt": "2026-03-17T09:20:00Z",
+        "lastUpdatedByAccountId": "acct-real-jamie",
+        "memories": [
+          {
+            "id": "f8d0ef41-b374-49d3-bf82-8d4479f0d101",
+            "title": "本地联调空间：下班后去便利店",
+            "detail": "这是给 space-local-demo 准备的独立快照，方便直接看出 iOS 真实 pull 读到的是哪份后端数据。",
+            "date": "2026-03-17T09:00:00Z",
+            "categoryRawValue": "日常",
+            "imageLabel": "便利店夜灯",
+            "mood": "轻松",
+            "location": "楼下便利店",
+            "weather": "多云",
+            "isFeatured": true,
+            "spaceId": "space-local-demo",
+            "createdByUserId": "user-jamie",
+            "createdAt": "2026-03-17T09:00:00Z",
+            "updatedAt": "2026-03-17T09:00:00Z",
+            "syncStatusRawValue": "synced"
+          }
+        ],
+        "wishes": [
+          {
+            "id": "33ec489f-59ca-43ce-a4c6-bc39791a0f62",
+            "title": "本地联调空间：周末做一顿早餐",
+            "detail": "保留一条简单愿望，用来验证 snapshot -> payload -> apply/store 的完整映射。",
+            "note": "看到这条就说明拉到的是 space-local-demo。",
+            "categoryRawValue": "美食",
+            "statusRawValue": "计划中",
+            "targetText": "这周末",
+            "symbol": "fork.knife",
+            "spaceId": "space-local-demo",
+            "createdByUserId": "user-alex",
+            "createdAt": "2026-03-17T08:40:00Z",
+            "updatedAt": "2026-03-17T09:05:00Z",
+            "syncStatusRawValue": "synced"
+          }
+        ],
+        "anniversaries": [
+          {
+            "id": "6cd2f5cc-b024-4536-95a2-cda54bd43853",
+            "title": "本地联调日",
+            "date": "2026-03-01T00:00:00Z",
+            "categoryRawValue": "自定义",
+            "note": "这条纪念日只用来识别当前本地后端是否已经切到 space-local-demo。",
+            "cadenceRawValue": "monthly",
+            "spaceId": "space-local-demo",
+            "createdByUserId": "user-alex",
+            "createdAt": "2026-03-01T00:00:00Z",
+            "updatedAt": "2026-03-17T09:05:00Z",
+            "syncStatusRawValue": "synced"
+          }
+        ]
+      }
+    }
+  }
+}

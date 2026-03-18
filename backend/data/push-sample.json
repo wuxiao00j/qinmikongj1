@@ -1,0 +1,78 @@
+{
+  "scope": {
+    "currentUserId": "user-alex",
+    "partnerUserId": "user-jamie",
+    "spaceId": "space-demo-couple",
+    "isSharedSpace": true
+  },
+  "memories": [
+    {
+      "id": "2d3005ca-2a75-4ec6-b8bf-f6675236bf24",
+      "title": "一起去江边散步",
+      "detail": "晚饭后沿着江边慢慢走了一圈，风很轻，回家路上顺手买了热可可。",
+      "date": "2026-03-16T12:00:00Z",
+      "categoryRawValue": "日常",
+      "imageLabel": "夜晚散步",
+      "mood": "放松",
+      "location": "江边步道",
+      "weather": "微风",
+      "isFeatured": true,
+      "spaceId": "space-demo-couple",
+      "createdByUserId": "user-jamie",
+      "createdAt": "2026-03-16T12:00:00Z",
+      "updatedAt": "2026-03-16T12:00:00Z",
+      "syncStatusRawValue": "synced"
+    },
+    {
+      "id": "afe7f5cd-3f12-4ae5-b0c5-c8265bf7bc06",
+      "title": "下雨天一起煮面",
+      "detail": "晚上突然下雨，我们在厨房边聊天边煮面，决定把这条也同步到云端。",
+      "date": "2026-03-17T11:30:00Z",
+      "categoryRawValue": "日常",
+      "imageLabel": "厨房晚餐",
+      "mood": "安心",
+      "location": "家里",
+      "weather": "小雨",
+      "isFeatured": false,
+      "spaceId": "space-demo-couple",
+      "createdByUserId": "user-alex",
+      "createdAt": "2026-03-17T11:30:00Z",
+      "updatedAt": "2026-03-17T11:30:00Z",
+      "syncStatusRawValue": "synced"
+    }
+  ],
+  "wishes": [
+    {
+      "id": "a3046b1f-bbaf-49ab-aa2d-3cf289114712",
+      "title": "周末去看海",
+      "detail": "找一个离城市不太远的海边住一晚，看日落。",
+      "note": "如果天气好就这个月出发。",
+      "categoryRawValue": "旅行",
+      "statusRawValue": "计划中",
+      "targetText": "这个月",
+      "symbol": "tram.fill",
+      "spaceId": "space-demo-couple",
+      "createdByUserId": "user-alex",
+      "createdAt": "2026-03-10T09:00:00Z",
+      "updatedAt": "2026-03-16T12:00:00Z",
+      "syncStatusRawValue": "synced"
+    }
+  ],
+  "anniversaries": [
+    {
+      "id": "f56c6be8-2471-446f-9ca0-f108502a9f6d",
+      "title": "第一次一起旅行",
+      "date": "2025-09-18T00:00:00Z",
+      "categoryRawValue": "自定义",
+      "note": "想把这天每年都记住。",
+      "cadenceRawValue": "yearly",
+      "spaceId": "space-demo-couple",
+      "createdByUserId": "user-alex",
+      "createdAt": "2025-09-18T00:00:00Z",
+      "updatedAt": "2026-03-16T12:00:00Z",
+      "syncStatusRawValue": "synced"
+    }
+  ],
+  "relationStatusRawValue": "paired",
+  "updatedAt": "2026-03-17T11:30:00Z"
+}
