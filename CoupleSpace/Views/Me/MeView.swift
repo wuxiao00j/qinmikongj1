@@ -107,9 +107,18 @@ struct MeView: View {
             )) {
                 AccountSyncStatusView()
             }
-            .onAppear(perform: handlePendingDeepLinkIfNeeded)
+            .onAppear {
+                handlePendingDeepLinkIfNeeded()
+                Task {
+                    await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+                }
+            }
             .onChange(of: navigationState.selectedTab) { _, _ in
                 handlePendingDeepLinkIfNeeded()
+                guard navigationState.selectedTab == .me else { return }
+                Task {
+                    await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+                }
             }
             .onChange(of: navigationState.pendingDeepLink) { _, _ in
                 handlePendingDeepLinkIfNeeded()
@@ -141,7 +150,7 @@ struct MeView: View {
     private var accountSyncSection: some View {
         AppSectionCard(
             title: "账号与同步",
-            subtitle: "登录账号、查看本地保存状态和备份方式；开发接入口继续收在详情页里。",
+            subtitle: "登录账号、查看本地保存状态和备份方式；测试环境接入口继续收在详情页里。",
             symbol: "person.crop.circle"
         ) {
             Button {
@@ -177,7 +186,7 @@ struct MeView: View {
                     .foregroundStyle(AppTheme.Colors.subtitle)
                     .lineSpacing(4)
 
-                Text("正式登录入口、当前会话状态和本地备份恢复都在详情页里；开发联调入口会单独收在下方，不会挡住普通使用主路径。")
+                Text("正式登录入口、当前会话状态和本地备份恢复都在详情页里；联调地址已切到公网测试环境，仅供当前设备测试，仍不是正式生产环境。")
                     .font(.footnote)
                     .foregroundStyle(AppTheme.Colors.subtitle)
                     .lineSpacing(4)
@@ -362,7 +371,7 @@ private struct AccountSyncStatusView: View {
 
                             capabilityRow(
                                 title: "云端状态边界",
-                                subtitle: "这里会统一承接上传、下载和云端连接状态；开发接入工具会单独放在下方，不影响日常查看。",
+                                subtitle: "这里会统一承接上传、下载和云端连接状态；测试环境接入工具会单独放在下方，不影响日常查看。",
                                 symbol: "icloud"
                             )
 
@@ -481,6 +490,15 @@ private struct AccountSyncStatusView: View {
         whisperNoteStore.items(in: contentScope)
     }
 
+    private var manualSyncIdentityText: String {
+        let sessionAccountId = accountSessionStore.state.account?.accountId ?? "未登录"
+        let relationshipAccountId = relationshipStore.state.currentAccountId ?? "未对齐"
+        let partnerUserId = relationshipStore.state.partner?.userId ?? "未绑定"
+        let spaceId = relationshipStore.state.space?.spaceId ?? contentScope.spaceId
+
+        return "当前账号 \(sessionAccountId)；关系归属 \(relationshipAccountId)；currentUser \(relationshipStore.state.currentUser.userId)；partner \(partnerUserId)；space \(spaceId)。"
+    }
+
     private var refreshTaskKey: String {
         "\(contentScope.spaceId)-\(accountSessionStore.state.account?.accountId ?? "local")-\(syncService.status.mode.label)"
     }
@@ -502,6 +520,7 @@ private struct AccountSyncStatusView: View {
             memories: memoryStore.entries(in: contentScope),
             wishes: wishStore.wishes(in: contentScope),
             anniversaries: anniversaryStore.anniversaries(in: contentScope),
+            weeklyTodos: weeklyTodoItems,
             scope: contentScope
         )
 
@@ -553,7 +572,7 @@ private struct AccountSyncStatusView: View {
                     SpaceInsight(
                         title: "内容快照",
                         value: "\(snapshot.totalCount) 条",
-                        note: "这里汇总了当前空间里的 \(snapshot.memoryCount) 段生活记录、\(snapshot.wishCount) 个愿望和 \(snapshot.anniversaryCount) 个纪念日。"
+                        note: "这里汇总了当前空间里的 \(snapshot.memoryCount) 段生活记录、\(snapshot.wishCount) 个愿望、\(snapshot.anniversaryCount) 个纪念日和 \(snapshot.weeklyTodoCount) 条本周事项。"
                     )
                 )
 
@@ -727,7 +746,7 @@ private struct AccountSyncStatusView: View {
                 }
 
                 moduleFootnote(
-                    "云端相关的开发接入、手动推送和读取能力仍保留在页面下方的开发接入区块里；这里先避免把它表达成已经正式开放的用户能力。"
+                    "云端相关的测试环境接入、手动推送和读取能力仍保留在页面下方的独立区块里；这里先避免把它表达成已经正式开放的用户能力。"
                 )
             }
         }
@@ -887,7 +906,7 @@ private struct AccountSyncStatusView: View {
 
     private var developerToolsSection: some View {
         AppSectionCard(
-            title: "开发接入",
+            title: "测试环境接入",
             subtitle: "仅在需要联调或验证读写闭环时再展开，平时使用可以忽略。",
             symbol: "wrench.and.screwdriver"
         ) {
@@ -902,7 +921,7 @@ private struct AccountSyncStatusView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppTheme.Colors.title)
 
-                    Text("这里保留测试账号登录、手动推送当前内容和读取快照的入口，用于内部验证，不影响上面的正式状态展示。")
+                    Text("这里保留测试账号登录、手动推送当前内容和读取快照的入口，用于当前设备验证，不影响上面的正式状态展示。")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.Colors.subtitle)
                         .lineSpacing(3)
@@ -916,7 +935,12 @@ private struct AccountSyncStatusView: View {
         VStack(alignment: .leading, spacing: 10) {
             modeCaption(
                 title: "手动接入",
-                subtitle: "用于连接本地开发环境并验证快照读写；这部分不会改变上面展示给普通用户的状态结构。"
+                subtitle: "用于连接当前公网测试环境并验证快照读写；仅供当前设备测试，不代表正式生产环境。"
+            )
+
+            modeCaption(
+                title: "当前联调身份",
+                subtitle: manualSyncIdentityText
             )
 
             HStack(spacing: 10) {
@@ -939,12 +963,13 @@ private struct AccountSyncStatusView: View {
                             memories: memoryStore.entries(in: contentScope),
                             wishes: wishStore.wishes(in: contentScope),
                             anniversaries: anniversaryStore.anniversaries(in: contentScope),
+                            weeklyTodos: weeklyTodoItems,
                             scope: contentScope
                         )
                     }
                 } label: {
                     PageActionPill(
-                        text: "同步当前内容到开发环境",
+                        text: "发送当前快照到测试环境",
                         systemImage: "arrow.up.circle"
                     )
                 }
@@ -957,11 +982,17 @@ private struct AccountSyncStatusView: View {
             HStack(spacing: 10) {
                 Button {
                     Task {
-                        _ = await syncService.pullCurrentScopeContentFromLocalBackend(scope: contentScope)
+                        _ = await syncService.pullAndApplyCurrentScopeContentFromLocalBackend(
+                            scope: contentScope,
+                            memoryStore: memoryStore,
+                            wishStore: wishStore,
+                            anniversaryStore: anniversaryStore,
+                            weeklyTodoStore: weeklyTodoStore
+                        )
                     }
                 } label: {
                     PageActionPill(
-                        text: "从开发环境读取快照",
+                        text: "从测试环境读取快照",
                         systemImage: "arrow.down.circle"
                     )
                 }
@@ -974,7 +1005,8 @@ private struct AccountSyncStatusView: View {
                         relationship: relationshipStore.state,
                         memories: memoryStore.entries(in: contentScope),
                         wishes: wishStore.wishes(in: contentScope),
-                        anniversaries: anniversaryStore.anniversaries(in: contentScope)
+                        anniversaries: anniversaryStore.anniversaries(in: contentScope),
+                        weeklyTodos: weeklyTodoItems
                     )
 
                     _ = syncService.rehearseRemoteSnapshotPayload(
@@ -982,7 +1014,8 @@ private struct AccountSyncStatusView: View {
                         to: contentScope,
                         memoryStore: memoryStore,
                         wishStore: wishStore,
-                        anniversaryStore: anniversaryStore
+                        anniversaryStore: anniversaryStore,
+                        weeklyTodoStore: weeklyTodoStore
                     )
                 } label: {
                     PageActionPill(text: "本地演练同步返回", systemImage: "square.and.arrow.down")
@@ -993,7 +1026,7 @@ private struct AccountSyncStatusView: View {
                 Spacer(minLength: 0)
             }
 
-            moduleFootnote("这里会用 demo-login 连接测试账号、把当前空间内容写到本地后端，或从本地后端读取最近快照；最右侧入口仍是本地演练数据，不会真正请求后端。")
+            moduleFootnote("这里的手动同步会先按当前 authenticated session 对齐 accountId / currentUserId / spaceId，再直接发送真实的 PUT 或 GET /spaces/{spaceId}/snapshot。读取入口会把当前快照链路里已经接入的内容直接应用到本地；最右侧入口仍是本地演练数据，不会真正请求后端。")
         }
     }
 
@@ -1217,7 +1250,8 @@ private enum AccountSyncRehearsalFixtures {
         relationship: CoupleRelationshipState,
         memories: [MemoryTimelineEntry],
         wishes: [PlaceWish],
-        anniversaries: [AnniversaryItem]
+        anniversaries: [AnniversaryItem],
+        weeklyTodos: [WeeklyTodoItem]
     ) -> RemoteSyncSnapshotPayload {
         let now = Date()
         let rehearsalMemory = MemoryTimelineEntry(
@@ -1265,6 +1299,18 @@ private enum AccountSyncRehearsalFixtures {
             updatedAt: now,
             syncStatus: .synced
         )
+        let rehearsalWeeklyTodo = WeeklyTodoItem(
+            id: UUID(uuidString: "55555555-6666-7777-8888-999999999999") ?? UUID(),
+            title: "云端返回演练：一起整理本周事项",
+            isCompleted: false,
+            scheduledDate: Calendar.current.date(byAdding: .day, value: 2, to: now),
+            owner: .both,
+            spaceId: scope.spaceId,
+            createdByUserId: scope.partnerUserId ?? scope.currentUserId,
+            createdAt: now,
+            updatedAt: now,
+            syncStatus: .synced
+        )
 
         return RemoteSyncSnapshotPayload(
             snapshotId: "remote-snapshot-rehearsal-\(scope.spaceId)",
@@ -1275,6 +1321,7 @@ private enum AccountSyncRehearsalFixtures {
             memories: merging(rehearsalMemory, into: markAsSynced(memories, updatedAt: now)),
             wishes: merging(rehearsalWish, into: markAsSynced(wishes, updatedAt: now)),
             anniversaries: merging(rehearsalAnniversary, into: markAsSynced(anniversaries, updatedAt: now)),
+            weeklyTodos: merging(rehearsalWeeklyTodo, into: markAsSynced(weeklyTodos, updatedAt: now)),
             relationStatus: relationship.relationStatus,
             updatedAt: now
         )
@@ -1289,6 +1336,10 @@ private enum AccountSyncRehearsalFixtures {
     }
 
     private static func merging(_ rehearsalItem: AnniversaryItem, into items: [AnniversaryItem]) -> [AnniversaryItem] {
+        [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
+    }
+
+    private static func merging(_ rehearsalItem: WeeklyTodoItem, into items: [WeeklyTodoItem]) -> [WeeklyTodoItem] {
         [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
     }
 
@@ -1344,6 +1395,23 @@ private enum AccountSyncRehearsalFixtures {
                 category: item.category,
                 note: item.note,
                 cadence: item.cadence,
+                spaceId: item.spaceId,
+                createdByUserId: item.createdByUserId,
+                createdAt: item.createdAt,
+                updatedAt: updatedAt,
+                syncStatus: .synced
+            )
+        }
+    }
+
+    private static func markAsSynced(_ items: [WeeklyTodoItem], updatedAt: Date) -> [WeeklyTodoItem] {
+        items.map { item in
+            WeeklyTodoItem(
+                id: item.id,
+                title: item.title,
+                isCompleted: item.isCompleted,
+                scheduledDate: item.scheduledDate,
+                owner: item.owner,
                 spaceId: item.spaceId,
                 createdByUserId: item.createdByUserId,
                 createdAt: item.createdAt,

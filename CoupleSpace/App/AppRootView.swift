@@ -68,6 +68,9 @@ struct AppRootView: View {
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             refreshWidgetSnapshots()
+            Task {
+                await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+            }
         }
         .onReceive(relationshipStore.$state) { _ in
             refreshWidgetSnapshots()

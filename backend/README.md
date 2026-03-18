@@ -6,6 +6,7 @@
 - `POST /auth/demo-login`
 - `POST /spaces`
 - `POST /spaces/join`
+- `GET /spaces/{spaceId}`
 - `GET /spaces/{spaceId}/snapshot`
 - `PUT /spaces/{spaceId}/snapshot`
 
@@ -154,7 +155,28 @@ curl http://127.0.0.1:8787/spaces/space-demo-couple/snapshot?accountId=acct-real
 
 对于新创建并加入成功的空间，也可以直接把 `spaceId` 换成新空间继续 pull。
 
-## 10. 写入空间快照
+## 10. 读取当前共享空间状态
+
+适合给 iOS 在进入“我的”/“空间设置”或回到前台时刷新关系状态：
+
+```bash
+curl http://127.0.0.1:8787/spaces/REPLACE_SPACE_ID \
+  -H 'Authorization: Bearer demo-token-riley' \
+  -H 'X-CoupleSpace-Account-ID: acct-real-riley' \
+  -H 'X-CoupleSpace-Session-Account-ID: acct-real-riley'
+```
+
+会返回当前空间最小状态，包括：
+
+- `spaceId`
+- `title`
+- `inviteCode`
+- `isActivated`
+- `relationStatus`
+- `currentAccount`
+- `partner`
+
+## 11. 写入空间快照
 
 兼容当前 iOS push 的 `StoredRemotePayload` 结构，也兼容直接上传远端 snapshot 结构。
 
@@ -167,7 +189,7 @@ curl -X PUT http://127.0.0.1:8787/spaces/space-demo-couple/snapshot \
   --data @backend/data/push-sample.json
 ```
 
-## 11. 当前数据层状态
+## 12. 当前数据层状态
 
 已经落库的核心表：
 

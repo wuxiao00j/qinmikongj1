@@ -226,8 +226,8 @@ struct LocalBackendConnectionConfiguration {
     let defaultDemoAccountID: String
 
     static let current = LocalBackendConnectionConfiguration(
-        environmentLabel: "开发环境连接",
-        baseURL: URL(string: "http://127.0.0.1:8787"),
+        environmentLabel: "公网测试环境",
+        baseURL: URL(string: "http://49.51.194.94:8787"),
         loginPath: "/auth/login",
         demoLoginPath: "/auth/demo-login",
         snapshotPathTemplate: "/spaces/{spaceId}/snapshot",
@@ -249,7 +249,7 @@ struct LocalBackendConnectionConfiguration {
     }
 
     var summaryText: String {
-        "\(environmentLabel) 使用 \(baseURLDisplayText)，上传和读取都会通过 \(snapshotPathTemplate) 手动触发。"
+        "\(environmentLabel) 使用 \(baseURLDisplayText)，当前仅供设备测试，仍不是正式生产环境；上传和读取都会通过 \(snapshotPathTemplate) 手动触发。"
     }
 }
 
@@ -285,11 +285,12 @@ struct SyncContentPayload {
     let memories: [MemoryTimelineEntry]
     let wishes: [PlaceWish]
     let anniversaries: [AnniversaryItem]
+    let weeklyTodos: [WeeklyTodoItem]
     let relationStatus: CoupleRelationStatus
     let updatedAt: Date
 
     var totalCount: Int {
-        memories.count + wishes.count + anniversaries.count
+        memories.count + wishes.count + anniversaries.count + weeklyTodos.count
     }
 
     var memoryCount: Int {
@@ -304,12 +305,17 @@ struct SyncContentPayload {
         anniversaries.count
     }
 
+    var weeklyTodoCount: Int {
+        weeklyTodos.count
+    }
+
     static func fromRemoteSnapshotPayload(_ payload: RemoteSyncSnapshotPayload) -> SyncContentPayload {
         SyncContentPayload(
             scope: payload.contentScope,
             memories: payload.memories,
             wishes: payload.wishes,
             anniversaries: payload.anniversaries,
+            weeklyTodos: payload.weeklyTodos,
             relationStatus: payload.relationStatus,
             updatedAt: payload.updatedAt
         )
@@ -328,6 +334,7 @@ struct RemoteSyncSnapshotPayload {
     let memories: [MemoryTimelineEntry]
     let wishes: [PlaceWish]
     let anniversaries: [AnniversaryItem]
+    let weeklyTodos: [WeeklyTodoItem]
     let relationStatus: CoupleRelationStatus
     let updatedAt: Date
 
@@ -360,9 +367,17 @@ struct SyncStatusSnapshot {
     let detail: String
 }
 
+private struct ManualBackendSyncTarget {
+    let scope: AppContentScope
+    let context: AppSyncRequestContext
+}
+
 enum AppSyncPrototypeError: LocalizedError {
     case remoteUnavailable
     case remoteContentMissing
+    case authenticatedSessionRequired
+    case backendSpaceRequired
+    case relationshipScopeMismatch
 
     var errorDescription: String? {
         switch self {
@@ -370,6 +385,12 @@ enum AppSyncPrototypeError: LocalizedError {
             return "云端同步接口还没有接入。"
         case .remoteContentMissing:
             return "云端还没有一份可拉取的内容。"
+        case .authenticatedSessionRequired:
+            return "请先登录账号，再把当前空间同步到测试环境。"
+        case .backendSpaceRequired:
+            return "请先进入已连接后端的共享空间，再发送这次测试环境同步。"
+        case .relationshipScopeMismatch:
+            return "当前共享空间身份还没有和这份账号对齐，请先回到空间设置刷新关系状态后再试。"
         }
     }
 }
@@ -380,10 +401,11 @@ struct SyncRemotePayloadSummary: Equatable {
     let memoryCount: Int
     let wishCount: Int
     let anniversaryCount: Int
+    let weeklyTodoCount: Int
     let updatedAt: Date
 
     var totalCount: Int {
-        memoryCount + wishCount + anniversaryCount
+        memoryCount + wishCount + anniversaryCount + weeklyTodoCount
     }
 
     init(
@@ -392,6 +414,7 @@ struct SyncRemotePayloadSummary: Equatable {
         memoryCount: Int,
         wishCount: Int,
         anniversaryCount: Int,
+        weeklyTodoCount: Int,
         updatedAt: Date
     ) {
         self.spaceId = spaceId
@@ -399,6 +422,7 @@ struct SyncRemotePayloadSummary: Equatable {
         self.memoryCount = memoryCount
         self.wishCount = wishCount
         self.anniversaryCount = anniversaryCount
+        self.weeklyTodoCount = weeklyTodoCount
         self.updatedAt = updatedAt
     }
 
@@ -408,6 +432,7 @@ struct SyncRemotePayloadSummary: Equatable {
         self.memoryCount = payload.memoryCount
         self.wishCount = payload.wishCount
         self.anniversaryCount = payload.anniversaryCount
+        self.weeklyTodoCount = payload.weeklyTodoCount
         self.updatedAt = payload.updatedAt
     }
 }
@@ -481,7 +506,7 @@ struct RealSyncRemoteProviderConfiguration {
     let defaultHeaders: [String: String]
 
     static let current = RealSyncRemoteProviderConfiguration(
-        providerName: "开发环境 API",
+        providerName: "测试环境 API",
         baseURL: LocalBackendConnectionConfiguration.current.baseURL,
         requiresAuthenticatedSession: true,
         timeoutInterval: 20,
@@ -504,22 +529,22 @@ enum LocalBackendDemoLoginError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .baseURLMissing:
-            return "本地测试后端地址还没有配置。"
+            return "测试环境地址还没有配置。"
         case .requestEncodingFailed:
-            return "这次没有成功整理开发环境登录请求。"
+            return "这次没有成功整理测试环境登录请求。"
         case .backendUnavailable:
-            return "本地后端还没有启动，请先运行本地服务。"
+            return "当前暂时连不上测试环境，请确认网络可用后再试。"
         case .requestFailed(let detail):
-            return "连接开发环境账号失败：\(detail)"
+            return "连接测试环境账号失败：\(detail)"
         case .invalidResponse:
-            return "本地后端返回了无法识别的响应。"
+            return "测试环境返回了无法识别的响应。"
         case .unexpectedStatusCode(let statusCode, let responseBody):
             let suffix = responseBody?.isEmpty == false ? "（\(responseBody!)）" : ""
-            return "开发环境登录返回了异常状态码 \(statusCode)\(suffix)"
+            return "测试环境登录返回了异常状态码 \(statusCode)\(suffix)"
         case .responseDecodingFailed(let detail):
-            return "开发环境登录返回解码失败：\(detail)"
+            return "测试环境登录返回解码失败：\(detail)"
         case .requiredFieldMissing(let field):
-            return "开发环境登录返回缺少关键字段：\(field)"
+            return "测试环境登录返回缺少关键字段：\(field)"
         }
     }
 }
@@ -544,7 +569,7 @@ enum LocalBackendAccountLoginError: LocalizedError {
         case .invalidCredentials:
             return "邮箱或密码不正确。"
         case .backendUnavailable:
-            return "本地后端还没有启动，请先运行本地服务。"
+            return "当前暂时连不上测试环境，请确认网络可用后再试。"
         case .requestFailed(let detail):
             return "登录请求失败：\(detail)"
         case .invalidResponse:
@@ -817,7 +842,7 @@ enum RealSyncRemoteProviderError: LocalizedError {
         case .authorizationSourceMissing:
             return "云端连接暂时还没有可用的鉴权信息。"
         case .backendUnavailable(let operation):
-            return "云端同步的 \(operation) 暂时连不上本地后端，请先确认本地服务已经启动。"
+            return "云端同步的 \(operation) 暂时连不上测试环境，请确认当前网络可用。"
         case .requestFailed(let operation, let detail):
             return "云端同步的 \(operation) 请求没有发成功：\(detail)"
         case .unexpectedStatusCode(let operation, let statusCode, let responseBody):
@@ -1010,6 +1035,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
     let memories: [StoredRemoteMemory]
     let wishes: [StoredRemoteWish]
     let anniversaries: [StoredRemoteAnniversary]
+    let weeklyTodos: [StoredRemoteWeeklyTodo]
     let relationStatusRawValue: String?
     let updatedAt: Date?
 
@@ -1024,6 +1050,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         case memories
         case wishes
         case anniversaries
+        case weeklyTodos
         case relationStatusRawValue
         case relationStatus
         case updatedAt
@@ -1042,6 +1069,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         memories = try container.decodeIfPresent([StoredRemoteMemory].self, forKey: .memories) ?? []
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
+        weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
         relationStatusRawValue = try container.decodeIfPresent(String.self, forKey: .relationStatusRawValue)
             ?? container.decodeIfPresent(String.self, forKey: .relationStatus)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
@@ -1102,6 +1130,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
             memories: memories.map(\.model),
             wishes: wishes.map(\.model),
             anniversaries: anniversaries.map(\.model),
+            weeklyTodos: weeklyTodos.map(\.model),
             relationStatus: relationStatus,
             updatedAt: updatedAt
         )
@@ -1587,19 +1616,19 @@ final class AppSyncService: ObservableObject {
     func connectLocalBackendDemoAccount() async {
         isSyncing = true
         latestErrorText = nil
-        latestEventText = "正在连接开发环境账号"
+        latestEventText = "正在连接测试环境账号"
         publishStatus()
 
         do {
             let payload = try await localBackendDemoLoginClient.login()
             sessionStore.adoptAuthenticatedPayload(payload)
             latestErrorText = nil
-            latestEventText = "已连接开发环境账号，并承接了当前所需的鉴权信息"
+            latestEventText = "已连接测试环境账号，并承接了当前所需的鉴权信息"
             isSyncing = false
             publishStatus()
         } catch {
             latestErrorText = error.localizedDescription
-            latestEventText = "这次没有连接上开发环境账号"
+            latestEventText = "这次没有连接上测试环境账号"
             isSyncing = false
             publishStatus()
         }
@@ -1618,6 +1647,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
+        weeklyTodos: [WeeklyTodoItem],
         scope: AppContentScope
     ) -> SyncContentPayload {
         SyncContentPayload(
@@ -1625,6 +1655,7 @@ final class AppSyncService: ObservableObject {
             memories: memories,
             wishes: wishes,
             anniversaries: anniversaries,
+            weeklyTodos: weeklyTodos,
             relationStatus: relationshipStore.state.relationStatus,
             updatedAt: .now
         )
@@ -1643,7 +1674,8 @@ final class AppSyncService: ObservableObject {
         to scope: AppContentScope,
         memoryStore: MemoryStore,
         wishStore: WishStore,
-        anniversaryStore: AnniversaryStore
+        anniversaryStore: AnniversaryStore,
+        weeklyTodoStore: WeeklyTodoStore
     ) -> Bool {
         guard sessionStore.state.sessionSource == .authenticated else {
             latestErrorText = "请先接入一份可用账号结果。"
@@ -1672,7 +1704,8 @@ final class AppSyncService: ObservableObject {
             to: scope,
             memoryStore: memoryStore,
             wishStore: wishStore,
-            anniversaryStore: anniversaryStore
+            anniversaryStore: anniversaryStore,
+            weeklyTodoStore: weeklyTodoStore
         )
     }
 
@@ -1686,6 +1719,55 @@ final class AppSyncService: ObservableObject {
             currentUserId: scope.currentUserId,
             partnerUserId: scope.partnerUserId,
             spaceId: scope.spaceId
+        )
+    }
+
+    private func resolveManualBackendSyncTarget(
+        preferredScope: AppContentScope
+    ) async throws -> ManualBackendSyncTarget {
+        guard sessionStore.state.sessionSource == .authenticated else {
+            throw AppSyncPrototypeError.authenticatedSessionRequired
+        }
+
+        await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+
+        let relationshipState = relationshipStore.state
+        guard relationshipState.connectionMode == .backendRemote,
+              relationshipState.space != nil else {
+            throw AppSyncPrototypeError.backendSpaceRequired
+        }
+
+        guard let accountId = sessionStore.state.account?.accountId else {
+            throw AppSyncPrototypeError.authenticatedSessionRequired
+        }
+
+        let relationshipAccountId = relationshipState.currentAccountId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let relationshipAccountId,
+           relationshipAccountId.isEmpty == false,
+           relationshipAccountId != accountId {
+            throw AppSyncPrototypeError.relationshipScopeMismatch
+        }
+
+        let resolvedScope = relationshipState.contentScope
+        let resolvedContext = AppSyncRequestContext(
+            accountId: accountId,
+            currentUserId: resolvedScope.currentUserId,
+            partnerUserId: resolvedScope.partnerUserId,
+            spaceId: resolvedScope.spaceId
+        )
+
+        if preferredScope.spaceId != resolvedScope.spaceId
+            || preferredScope.currentUserId != resolvedScope.currentUserId
+            || preferredScope.partnerUserId != resolvedScope.partnerUserId {
+            latestEventText = "已改用当前账号 \(accountId) 在空间 \(resolvedScope.spaceId) 的真实身份继续同步"
+            publishStatus()
+        }
+
+        return ManualBackendSyncTarget(
+            scope: resolvedScope,
+            context: resolvedContext
         )
     }
 
@@ -1717,6 +1799,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
+        weeklyTodos: [WeeklyTodoItem],
         scope: AppContentScope
     ) async -> Bool {
         isSyncing = true
@@ -1728,6 +1811,7 @@ final class AppSyncService: ObservableObject {
             memories: memories,
             wishes: wishes,
             anniversaries: anniversaries,
+            weeklyTodos: weeklyTodos,
             scope: scope
         )
 
@@ -1777,22 +1861,25 @@ final class AppSyncService: ObservableObject {
     func pullCurrentScopeContentFromLocalBackend(scope: AppContentScope) async -> SyncContentPayload? {
         isSyncing = true
         latestErrorText = nil
-        latestEventText = "正在从本地后端读取最近快照"
+        latestEventText = "正在从测试环境读取最近快照"
         publishStatus()
 
         do {
-            let context = try makeRequestContext(scope: scope)
+            let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
+            let context = target.context
+            latestEventText = "正在以 \(context.accountId) / \(context.currentUserId) 读取 GET /spaces/\(context.spaceId)/snapshot"
+            publishStatus()
             let payload = try await realSyncProvider.pullContent(for: context)
             latestPulledPayload = payload
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPullAt = .now
-            latestEventText = "已从本地后端拉取最近快照"
+            latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 从测试环境拉取最近快照"
             isSyncing = false
             publishStatus()
             return payload
         } catch {
             latestErrorText = error.localizedDescription
-            latestEventText = "这次没有从本地后端拉取到快照"
+            latestEventText = "这次没有从测试环境拉取到快照"
             isSyncing = false
             publishStatus()
             return nil
@@ -1804,32 +1891,36 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
+        weeklyTodos: [WeeklyTodoItem],
         scope: AppContentScope
     ) async -> Bool {
         isSyncing = true
         latestErrorText = nil
-        latestEventText = "正在把当前内容同步到本地后端"
+        latestEventText = "正在把当前内容同步到测试环境"
         publishStatus()
 
-        let payload = buildSnapshot(
-            memories: memories,
-            wishes: wishes,
-            anniversaries: anniversaries,
-            scope: scope
-        )
-
         do {
-            let context = try makeRequestContext(scope: scope)
+            let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
+            let context = target.context
+            let payload = buildSnapshot(
+                memories: memories,
+                wishes: wishes,
+                anniversaries: anniversaries,
+                weeklyTodos: weeklyTodos,
+                scope: target.scope
+            )
+            latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot"
+            publishStatus()
             try await realSyncProvider.pushContent(payload, context: context)
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPushAt = .now
-            latestEventText = "已同步当前内容到本地后端"
+            latestEventText = "已发送 PUT /spaces/\(context.spaceId)/snapshot"
             isSyncing = false
             publishStatus()
             return true
         } catch {
             latestErrorText = error.localizedDescription
-            latestEventText = "这次没有同步到本地后端"
+            latestEventText = "这次没有发出 PUT /spaces/\(scope.spaceId)/snapshot"
             isSyncing = false
             publishStatus()
             return false
@@ -1841,9 +1932,10 @@ final class AppSyncService: ObservableObject {
         to scope: AppContentScope,
         memoryStore: MemoryStore,
         wishStore: WishStore,
-        anniversaryStore: AnniversaryStore
+        anniversaryStore: AnniversaryStore,
+        weeklyTodoStore: WeeklyTodoStore
     ) -> Bool {
-        guard let latestPulledPayload, latestPulledPayload.scope.spaceId == scope.spaceId else {
+        guard let latestPulledPayload, latestPulledPayload.scope == scope else {
             latestErrorText = "还没有可应用到当前空间的云端内容。"
             latestEventText = "请先拉取最近云端内容"
             publishStatus()
@@ -1853,12 +1945,62 @@ final class AppSyncService: ObservableObject {
         memoryStore.replaceEntries(in: scope, with: latestPulledPayload.memories)
         wishStore.replaceWishes(in: scope, with: latestPulledPayload.wishes)
         anniversaryStore.replaceAnniversaries(in: scope, with: latestPulledPayload.anniversaries)
+        weeklyTodoStore.replaceItems(in: scope, with: latestPulledPayload.weeklyTodos)
 
         lastAppliedAt = .now
         latestErrorText = nil
         latestEventText = "已将最近云端内容应用到当前空间"
         publishStatus()
         return true
+    }
+
+    @discardableResult
+    func pullAndApplyCurrentScopeContentFromLocalBackend(
+        scope: AppContentScope,
+        memoryStore: MemoryStore,
+        wishStore: WishStore,
+        anniversaryStore: AnniversaryStore,
+        weeklyTodoStore: WeeklyTodoStore
+    ) async -> Bool {
+        isSyncing = true
+        latestErrorText = nil
+        latestEventText = "正在从测试环境读取并应用最近快照"
+        publishStatus()
+
+        do {
+            let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
+            let context = target.context
+            latestEventText = "正在以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照"
+            publishStatus()
+
+            let payload = try await realSyncProvider.pullContent(for: context)
+            latestPulledPayload = payload
+            remoteSummary = SyncRemotePayloadSummary(payload: payload)
+            lastPullAt = .now
+
+            let didApply = applyLatestPulledContent(
+                to: target.scope,
+                memoryStore: memoryStore,
+                wishStore: wishStore,
+                anniversaryStore: anniversaryStore,
+                weeklyTodoStore: weeklyTodoStore
+            )
+
+            if didApply {
+                latestErrorText = nil
+                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照"
+            }
+
+            isSyncing = false
+            publishStatus()
+            return didApply
+        } catch {
+            latestErrorText = error.localizedDescription
+            latestEventText = "这次没有从测试环境拉取到快照"
+            isSyncing = false
+            publishStatus()
+            return false
+        }
     }
 
     private func publishStatus(
@@ -1909,7 +2051,7 @@ final class AppSyncService: ObservableObject {
             detail = "内容仍然优先保存在本机。等账号能力开启后，这里会继续承接云端连接、同步状态和换机恢复。"
         case .cloudPrepared:
             summary = relationship.isBound ? "云端准备已经就绪" : "换机恢复准备已经就绪"
-            detail = "当前已经可以承接账号与云端状态；如果需要连接开发环境，可在页面下方手动继续。"
+            detail = "当前已经可以承接账号与云端状态；如需联调测试，可在页面下方连接测试环境。"
         case .cloudConnected:
             summary = "云端同步已接入"
             detail = "这里会继续统一展示账号状态、同步进度和云端空间连接结果。"
@@ -1924,7 +2066,7 @@ final class AppSyncService: ObservableObject {
             hasRemoteContent: remoteSummary != nil,
             remoteSummary: remoteSummary,
             isSyncing: isSyncing,
-            canApplyPulledContent: latestPulledPayload?.scope.spaceId == relationship.contentScope.spaceId,
+            canApplyPulledContent: latestPulledPayload?.scope == relationship.contentScope,
             lastPushAt: lastPushAt,
             lastPullAt: lastPullAt,
             lastAppliedAt: lastAppliedAt,
@@ -1941,6 +2083,7 @@ private struct StoredRemotePayload: Codable {
     let memories: [StoredRemoteMemory]
     let wishes: [StoredRemoteWish]
     let anniversaries: [StoredRemoteAnniversary]
+    let weeklyTodos: [StoredRemoteWeeklyTodo]
     let relationStatusRawValue: String
     let updatedAt: Date
 
@@ -1949,6 +2092,7 @@ private struct StoredRemotePayload: Codable {
         memories = payload.memories.map(StoredRemoteMemory.init)
         wishes = payload.wishes.map(StoredRemoteWish.init)
         anniversaries = payload.anniversaries.map(StoredRemoteAnniversary.init)
+        weeklyTodos = payload.weeklyTodos.map(StoredRemoteWeeklyTodo.init)
         relationStatusRawValue = payload.relationStatus.rawValue
         updatedAt = payload.updatedAt
     }
@@ -1960,6 +2104,7 @@ private struct StoredRemotePayload: Codable {
             memoryCount: memories.count,
             wishCount: wishes.count,
             anniversaryCount: anniversaries.count,
+            weeklyTodoCount: weeklyTodos.count,
             updatedAt: updatedAt
         )
     }
@@ -1970,6 +2115,7 @@ private struct StoredRemotePayload: Codable {
             memories: memories.map(\.model),
             wishes: wishes.map(\.model),
             anniversaries: anniversaries.map(\.model),
+            weeklyTodos: weeklyTodos.map(\.model),
             relationStatus: CoupleRelationStatus(rawValue: relationStatusRawValue) ?? .unpaired,
             updatedAt: updatedAt
         )
@@ -2140,6 +2286,47 @@ private struct StoredRemoteAnniversary: Codable {
             category: AnniversaryCategory(rawValue: categoryRawValue) ?? .custom,
             note: note,
             cadence: AnniversaryCadence(rawValue: cadenceRawValue) ?? .yearly,
+            spaceId: spaceId,
+            createdByUserId: createdByUserId,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
+        )
+    }
+}
+
+private struct StoredRemoteWeeklyTodo: Codable {
+    let id: UUID
+    let title: String
+    let isCompleted: Bool
+    let scheduledDate: Date?
+    let ownerRawValue: String?
+    let spaceId: String
+    let createdByUserId: String
+    let createdAt: Date
+    let updatedAt: Date
+    let syncStatusRawValue: String
+
+    init(_ item: WeeklyTodoItem) {
+        id = item.id
+        title = item.title
+        isCompleted = item.isCompleted
+        scheduledDate = item.scheduledDate
+        ownerRawValue = item.owner?.rawValue
+        spaceId = item.spaceId
+        createdByUserId = item.createdByUserId
+        createdAt = item.createdAt
+        updatedAt = item.updatedAt
+        syncStatusRawValue = item.syncStatus.rawValue
+    }
+
+    var model: WeeklyTodoItem {
+        WeeklyTodoItem(
+            id: id,
+            title: title,
+            isCompleted: isCompleted,
+            scheduledDate: scheduledDate,
+            owner: ownerRawValue.flatMap(WeeklyTodoOwner.init(rawValue:)),
             spaceId: spaceId,
             createdByUserId: createdByUserId,
             createdAt: createdAt,

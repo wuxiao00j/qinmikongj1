@@ -59,6 +59,7 @@ struct SharedSpaceState: Codable, Equatable {
 }
 
 struct CoupleRelationshipState: Codable, Equatable {
+    var currentAccountId: String?
     var currentUser: RelationshipUser
     var partner: RelationshipUser?
     var space: SharedSpaceState?
@@ -69,6 +70,7 @@ struct CoupleRelationshipState: Codable, Equatable {
     var pairedAt: Date?
 
     static let demoDefault = CoupleRelationshipState(
+        currentAccountId: nil,
         currentUser: RelationshipUser(
             userId: "user-local",
             nickname: "我",
@@ -84,6 +86,7 @@ struct CoupleRelationshipState: Codable, Equatable {
     )
 
     private enum CodingKeys: String, CodingKey {
+        case currentAccountId
         case currentUser
         case partner
         case space
@@ -95,6 +98,7 @@ struct CoupleRelationshipState: Codable, Equatable {
     }
 
     init(
+        currentAccountId: String?,
         currentUser: RelationshipUser,
         partner: RelationshipUser?,
         space: SharedSpaceState?,
@@ -104,6 +108,7 @@ struct CoupleRelationshipState: Codable, Equatable {
         invitedAt: Date?,
         pairedAt: Date?
     ) {
+        self.currentAccountId = currentAccountId
         self.currentUser = currentUser
         self.partner = partner
         self.space = space
@@ -116,6 +121,7 @@ struct CoupleRelationshipState: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        currentAccountId = try container.decodeIfPresent(String.self, forKey: .currentAccountId)
         currentUser = try container.decode(RelationshipUser.self, forKey: .currentUser)
         partner = try container.decodeIfPresent(RelationshipUser.self, forKey: .partner)
         space = try container.decodeIfPresent(SharedSpaceState.self, forKey: .space)
@@ -128,6 +134,7 @@ struct CoupleRelationshipState: Codable, Equatable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(currentAccountId, forKey: .currentAccountId)
         try container.encode(currentUser, forKey: .currentUser)
         try container.encodeIfPresent(partner, forKey: .partner)
         try container.encodeIfPresent(space, forKey: .space)
@@ -213,9 +220,9 @@ enum RelationshipActionError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .backendUnavailable:
-            return "本地后端还没有启动，请先确认开发环境服务已经运行。"
+            return "当前暂时连不上测试环境，请确认当前网络可用。"
         case .unauthorized:
-            return "当前账号状态已经失效，请重新连接一次开发账号后再试。"
+            return "当前账号状态已经失效，请重新登录后再试。"
         case .invalidInviteCode:
             return "还没有识别到这个邀请码，请确认对方已经先创建共享空间，并把完整邀请码发给你。"
         case .spaceFull:
@@ -223,7 +230,7 @@ enum RelationshipActionError: LocalizedError, Equatable {
         case .activeSpaceExists:
             return "当前账号已经在另一个共享空间里，暂时不能再创建或加入新的空间。"
         case .accountUnavailable:
-            return "还没有识别到可用的开发账号，请确认当前昵称对应后端里的测试账号。"
+            return "还没有识别到可用账号，请先完成登录后再试。"
         case .backendRequestFailed(let message):
             return message
         case .responseDecodingFailed:
@@ -287,6 +294,64 @@ private struct RelationshipBackendClient {
             sessionState: sessionState,
             requestBody: ["inviteCode": inviteCode]
         )
+    }
+
+    func fetchSpaceStatus(
+        spaceId: String,
+        sessionState: AccountSessionState
+    ) async throws -> RelationshipBackendSpacePayload {
+        guard let baseURL = configuration.baseURL else {
+            throw RelationshipActionError.backendUnavailable
+        }
+
+        guard let account = sessionState.account,
+              let authorization = sessionState.authorization,
+              sessionState.sessionSource == .authenticated else {
+            throw RelationshipActionError.unauthorized
+        }
+
+        var url = baseURL
+        url.appendPathComponent("spaces")
+        url.appendPathComponent(spaceId)
+
+        var request = URLRequest(url: url, timeoutInterval: 20)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(account.accountId, forHTTPHeaderField: "X-CoupleSpace-Account-ID")
+        request.setValue(account.accountId, forHTTPHeaderField: "X-CoupleSpace-Session-Account-ID")
+        request.setValue("Bearer \(authorization.accessToken)", forHTTPHeaderField: "Authorization")
+
+        let data: Data
+        let response: URLResponse
+
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let urlError as URLError {
+            switch urlError.code {
+            case .cannotConnectToHost, .timedOut, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet:
+                throw RelationshipActionError.backendUnavailable
+            default:
+                throw RelationshipActionError.backendRequestFailed(message: "这次没有连上关系服务：\(urlError.localizedDescription)")
+            }
+        } catch {
+            throw RelationshipActionError.backendRequestFailed(message: "这次没有连上关系服务：\(error.localizedDescription)")
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RelationshipActionError.responseDecodingFailed
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw mapBackendError(data: data, statusCode: httpResponse.statusCode)
+        }
+
+        let decoder = JSONDecoder()
+
+        do {
+            return try decoder.decode(RelationshipBackendSpacePayload.self, from: data)
+        } catch {
+            throw RelationshipActionError.responseDecodingFailed
+        }
     }
 
     private func sendRequest(
@@ -405,7 +470,6 @@ final class RelationshipStore: ObservableObject {
     private let storageKey = "com.barry.CoupleSpace.relationshipState"
     private let inviteRecordsStorageKey = "com.barry.CoupleSpace.relationshipInviteRecords"
     private let backendClient: RelationshipBackendClient
-    private let demoLoginClient: LocalBackendDemoLoginClient
 
     init(
         defaults: UserDefaults = .standard,
@@ -414,7 +478,6 @@ final class RelationshipStore: ObservableObject {
         self.defaults = defaults
         self.accountSessionStore = accountSessionStore
         self.backendClient = RelationshipBackendClient()
-        self.demoLoginClient = LocalBackendDemoLoginClient()
 
         if let data = defaults.data(forKey: storageKey) {
             do {
@@ -436,12 +499,13 @@ final class RelationshipStore: ObservableObject {
             fallback: accountSessionStore.state.account?.nickname ?? state.currentUser.nickname
         )
         let partnerName = Self.normalizedName(partnerNickname, fallback: "对方")
-        let sessionState = try await ensureAuthenticatedSession(preferredDisplayName: currentName)
+        let sessionState = try ensureAuthenticatedSession()
         let spaceTitle = "\(currentName) 和 \(partnerName) 的共享空间"
         let payload = try await backendClient.createSpace(title: spaceTitle, sessionState: sessionState)
         let invitedAt = Date()
 
         state = CoupleRelationshipState(
+            currentAccountId: payload.currentAccountId,
             currentUser: Self.makeUser(id: payload.currentUserId, nickname: currentName),
             partner: Self.makeUser(
                 id: payload.partnerUserId ?? "pending-\(payload.inviteCode.lowercased())",
@@ -464,6 +528,7 @@ final class RelationshipStore: ObservableObject {
             pairedAt: payload.isActivated ? invitedAt : nil
         )
         save()
+        await refreshRemoteRelationshipStatusIfNeeded()
     }
 
     func joinSpace(currentNickname: String, partnerNickname: String, inviteCode: String) async throws {
@@ -472,12 +537,13 @@ final class RelationshipStore: ObservableObject {
             currentNickname,
             fallback: accountSessionStore.state.account?.nickname ?? state.currentUser.nickname
         )
-        let sessionState = try await ensureAuthenticatedSession(preferredDisplayName: currentName)
+        let sessionState = try ensureAuthenticatedSession()
         let payload = try await backendClient.joinSpace(inviteCode: normalizedCode, sessionState: sessionState)
         let partnerName = Self.normalizedName(partnerNickname, fallback: state.partner?.nickname ?? "对方")
         let now = Date()
 
         state = CoupleRelationshipState(
+            currentAccountId: payload.currentAccountId,
             currentUser: Self.makeUser(id: payload.currentUserId, nickname: currentName),
             partner: payload.partnerUserId.map { Self.makeUser(id: $0, nickname: partnerName) },
             space: SharedSpaceState(
@@ -497,6 +563,7 @@ final class RelationshipStore: ObservableObject {
             pairedAt: payload.isActivated ? now : nil
         )
         save()
+        await refreshRemoteRelationshipStatusIfNeeded()
     }
 
     func createLocalDemoSpace(currentNickname: String, partnerNickname: String) {
@@ -519,6 +586,7 @@ final class RelationshipStore: ObservableObject {
         )
 
         state = CoupleRelationshipState(
+            currentAccountId: nil,
             currentUser: Self.makeUser(id: state.currentUser.userId, nickname: currentName),
             partner: Self.makeUser(id: "pending-\(UUID().uuidString)", nickname: partnerName),
             space: SharedSpaceState(
@@ -548,6 +616,7 @@ final class RelationshipStore: ObservableObject {
         let pairedAt = Date()
 
         state = CoupleRelationshipState(
+            currentAccountId: nil,
             currentUser: Self.makeUser(id: state.currentUser.userId, nickname: currentName),
             partner: Self.makeUser(id: inviteRecord.ownerUserId, nickname: partnerName),
             space: SharedSpaceState(
@@ -658,36 +727,115 @@ final class RelationshipStore: ObservableObject {
         )
     }
 
-    private func ensureAuthenticatedSession(preferredDisplayName: String) async throws -> AccountSessionState {
-        if let account = accountSessionStore.state.account,
-           accountSessionStore.state.sessionSource == .authenticated,
-           let authorization = accountSessionStore.state.authorization,
-           authorization.accessToken.isEmpty == false {
-            let normalizedPreferredName = preferredDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if normalizedPreferredName.isEmpty || account.nickname.lowercased() == normalizedPreferredName {
-                return accountSessionStore.state
+    private func ensureAuthenticatedSession() throws -> AccountSessionState {
+        let sessionState = accountSessionStore.state
+
+        guard sessionState.sessionSource == .authenticated,
+              sessionState.account != nil else {
+            throw RelationshipActionError.accountUnavailable
+        }
+
+        guard let authorization = sessionState.authorization,
+              authorization.accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw RelationshipActionError.unauthorized
+        }
+
+        return sessionState
+    }
+
+    func refreshRemoteRelationshipStatusIfNeeded() async {
+        guard state.connectionMode == .backendRemote,
+              let space = state.space else {
+            return
+        }
+
+        let sessionState: AccountSessionState
+        do {
+            sessionState = try ensureAuthenticatedSession()
+        } catch {
+            return
+        }
+
+        let payload: RelationshipBackendSpacePayload
+        do {
+            payload = try await backendClient.fetchSpaceStatus(
+                spaceId: space.spaceId,
+                sessionState: sessionState
+            )
+        } catch {
+            return
+        }
+
+        applyRefreshedRelationshipStatus(payload)
+    }
+
+    private func applyRefreshedRelationshipStatus(_ payload: RelationshipBackendSpacePayload) {
+        let refreshedStatus = CoupleRelationStatus(
+            remoteRelationStatus: payload.relationStatus,
+            isActivated: payload.isActivated
+        )
+
+        var nextState = state
+        var hasChanges = false
+
+        if nextState.currentAccountId != payload.currentAccountId {
+            nextState.currentAccountId = payload.currentAccountId
+            hasChanges = true
+        }
+
+        if nextState.currentUser.userId != payload.currentUserId {
+            nextState.currentUser = Self.makeUser(
+                id: payload.currentUserId,
+                nickname: nextState.currentUser.nickname
+            )
+            hasChanges = true
+        }
+
+        if nextState.relationStatus != refreshedStatus {
+            nextState.relationStatus = refreshedStatus
+            hasChanges = true
+        }
+
+        let refreshedSpace = SharedSpaceState(
+            spaceId: payload.spaceId,
+            title: payload.title,
+            inviteCode: payload.inviteCode,
+            isActivated: payload.isActivated,
+            createdAt: nextState.space?.createdAt ?? nextState.invitedAt ?? nextState.pairedAt ?? Date()
+        )
+
+        if nextState.space != refreshedSpace {
+            nextState.space = refreshedSpace
+            hasChanges = true
+        }
+
+        if let partnerUserId = payload.partnerUserId,
+           partnerUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            let normalizedPartnerNickname = Self.normalizedName(
+                nextState.partner?.nickname ?? "",
+                fallback: "对方"
+            )
+            let refreshedPartner = Self.makeUser(
+                id: partnerUserId,
+                nickname: normalizedPartnerNickname
+            )
+
+            if nextState.partner != refreshedPartner {
+                nextState.partner = refreshedPartner
+                hasChanges = true
             }
         }
 
-        do {
-            let payload = try await demoLoginClient.login(displayName: preferredDisplayName)
-            accountSessionStore.adoptAuthenticatedPayload(payload)
-            return accountSessionStore.state
-        } catch let error as LocalBackendDemoLoginError {
-            switch error {
-            case .backendUnavailable:
-                throw RelationshipActionError.backendUnavailable
-            case .unexpectedStatusCode, .requestFailed, .responseDecodingFailed, .invalidResponse:
-                throw RelationshipActionError.backendRequestFailed(message: error.localizedDescription)
-            case .requiredFieldMissing:
-                throw RelationshipActionError.responseDecodingFailed
-            case .baseURLMissing:
-                throw RelationshipActionError.backendUnavailable
-            case .requestEncodingFailed:
-                throw RelationshipActionError.backendRequestFailed(message: "这次没有成功整理账号请求。")
+        if refreshedStatus == .paired {
+            let resolvedPairedAt = nextState.pairedAt ?? Date()
+            if nextState.pairedAt != resolvedPairedAt {
+                nextState.pairedAt = resolvedPairedAt
+                hasChanges = true
             }
-        } catch {
-            throw RelationshipActionError.backendRequestFailed(message: error.localizedDescription)
         }
+
+        guard hasChanges else { return }
+        state = nextState
+        save()
     }
 }

@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -94,6 +94,31 @@ class SpaceConnectionResponse(BaseModel):
     partnerUserId: str | None = None
 
 
+class SpaceParticipantSummary(BaseModel):
+    accountId: str
+    displayName: str
+    providerName: str
+    accountHint: str | None = None
+    currentUserId: str
+    role: str
+
+
+class SpaceStatusResponse(BaseModel):
+    spaceId: str
+    title: str
+    inviteCode: str
+    isActivated: bool
+    memberCount: int
+    currentRole: str
+    relationStatus: str
+    currentAccountId: str
+    currentUserId: str
+    partnerAccountId: str | None = None
+    partnerUserId: str | None = None
+    currentAccount: SpaceParticipantSummary
+    partner: SpaceParticipantSummary | None = None
+
+
 class StoredRemoteMemoryModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -148,6 +173,21 @@ class StoredRemoteAnniversaryModel(BaseModel):
     syncStatusRawValue: str
 
 
+class StoredRemoteWeeklyTodoModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    isCompleted: bool
+    scheduledDate: datetime | None = None
+    ownerRawValue: str | None = None
+    spaceId: str
+    createdByUserId: str
+    createdAt: datetime
+    updatedAt: datetime
+    syncStatusRawValue: str
+
+
 class StoredScopeModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -161,9 +201,10 @@ class StoredSnapshotRequestModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     scope: StoredScopeModel
-    memories: list[StoredRemoteMemoryModel]
-    wishes: list[StoredRemoteWishModel]
-    anniversaries: list[StoredRemoteAnniversaryModel]
+    memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
+    wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
+    anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
+    weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     relationStatusRawValue: str
     updatedAt: datetime
 
@@ -176,9 +217,10 @@ class RemoteSnapshotResponseModel(BaseModel):
     currentUserId: str
     partnerUserId: str | None = None
     isSharedSpace: bool
-    memories: list[StoredRemoteMemoryModel]
-    wishes: list[StoredRemoteWishModel]
-    anniversaries: list[StoredRemoteAnniversaryModel]
+    memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
+    wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
+    anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
+    weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     relationStatus: str
     updatedAt: datetime
 
@@ -187,9 +229,10 @@ class SnapshotRecordModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     snapshotId: str
-    memories: list[StoredRemoteMemoryModel]
-    wishes: list[StoredRemoteWishModel]
-    anniversaries: list[StoredRemoteAnniversaryModel]
+    memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
+    wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
+    anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
+    weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     relationStatus: str
     updatedAt: datetime
     lastUpdatedByAccountId: str | None = None
@@ -398,6 +441,7 @@ def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordMo
         memories=[],
         wishes=[],
         anniversaries=[],
+        weeklyTodos=[],
         relationStatus="paired",
         updatedAt=utc_now(),
         lastUpdatedByAccountId=account.account_id,
@@ -410,6 +454,7 @@ def make_snapshot_record(space_id: str, account: Account, relation_status: str) 
         memories=[],
         wishes=[],
         anniversaries=[],
+        weeklyTodos=[],
         relationStatus=relation_status,
         updatedAt=utc_now(),
         lastUpdatedByAccountId=account.account_id,
@@ -434,6 +479,7 @@ def build_snapshot_response(session: Session, space: Space, account: Account) ->
         memories=snapshot.memories,
         wishes=snapshot.wishes,
         anniversaries=snapshot.anniversaries,
+        weeklyTodos=snapshot.weeklyTodos,
         relationStatus=snapshot.relationStatus,
         updatedAt=snapshot.updatedAt,
     ).model_dump(mode="json")
@@ -464,6 +510,7 @@ def normalize_snapshot_payload(
             memories=stored_payload.memories,
             wishes=stored_payload.wishes,
             anniversaries=stored_payload.anniversaries,
+            weeklyTodos=stored_payload.weeklyTodos,
             relationStatus=stored_payload.relationStatusRawValue,
             updatedAt=utc_now(),
             lastUpdatedByAccountId=account.account_id,
@@ -498,6 +545,7 @@ def normalize_snapshot_payload(
             memories=remote_payload.memories,
             wishes=remote_payload.wishes,
             anniversaries=remote_payload.anniversaries,
+            weeklyTodos=remote_payload.weeklyTodos,
             relationStatus=remote_payload.relationStatus,
             updatedAt=utc_now(),
             lastUpdatedByAccountId=account.account_id,
@@ -612,6 +660,42 @@ def build_space_connection_response(session: Session, space: Space, account: Acc
         currentUserId=account.current_user_id,
         partnerAccountId=partner_account.account_id if partner_account is not None else None,
         partnerUserId=partner_account.current_user_id if partner_account is not None else None,
+    )
+
+
+def build_space_participant_summary(space: Space, account: Account) -> SpaceParticipantSummary:
+    return SpaceParticipantSummary(
+        accountId=account.account_id,
+        displayName=account.display_name,
+        providerName=account.provider_name,
+        accountHint=account.account_hint,
+        currentUserId=account.current_user_id,
+        role=get_member_role(space, account.account_id),
+    )
+
+
+def build_space_status_response(session: Session, space: Space, account: Account) -> SpaceStatusResponse:
+    partner_account = get_partner_account(session, space, account)
+    current_account_summary = build_space_participant_summary(space, account)
+    partner_summary = (
+        build_space_participant_summary(space, partner_account)
+        if partner_account is not None
+        else None
+    )
+    return SpaceStatusResponse(
+        spaceId=space.space_id,
+        title=space.title,
+        inviteCode=space.invite_code or "",
+        isActivated=space.is_active,
+        memberCount=len(space.members),
+        currentRole=current_account_summary.role,
+        relationStatus=relation_status_for_space(space),
+        currentAccountId=account.account_id,
+        currentUserId=account.current_user_id,
+        partnerAccountId=partner_account.account_id if partner_account is not None else None,
+        partnerUserId=partner_account.current_user_id if partner_account is not None else None,
+        currentAccount=current_account_summary,
+        partner=partner_summary,
     )
 
 
@@ -786,6 +870,24 @@ async def join_space(
     db.expire_all()
     joined_space = get_space_or_raise(db, space.space_id)
     return build_space_connection_response(db, joined_space, account)
+
+
+@app.get("/spaces/{space_id}", response_model=SpaceStatusResponse)
+async def get_space_status(
+    space_id: str,
+    authorization: str | None = Header(default=None),
+    x_couple_space_account_id: str | None = Header(default=None, alias="X-CoupleSpace-Account-ID"),
+    x_couple_space_session_account_id: str | None = Header(default=None, alias="X-CoupleSpace-Session-Account-ID"),
+    db: Session = Depends(get_db),
+) -> SpaceStatusResponse:
+    account = require_account(
+        session=db,
+        authorization=authorization,
+        account_id_header=x_couple_space_account_id,
+        session_account_id_header=x_couple_space_session_account_id,
+    )
+    space = ensure_space_access(db, space_id, account)
+    return build_space_status_response(db, space, account)
 
 
 @app.get("/spaces/{space_id}/snapshot", response_model=RemoteSnapshotResponseModel)

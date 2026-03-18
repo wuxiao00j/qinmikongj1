@@ -138,6 +138,9 @@ struct SpaceSettingsView: View {
             }
         }
         .onAppear {
+            Task {
+                await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+            }
             guard !hasPresentedInitialAction else { return }
             guard relationshipStore.state.relationStatus == .unpaired else { return }
             guard let initialAction else { return }
