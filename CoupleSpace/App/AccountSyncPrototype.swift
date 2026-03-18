@@ -286,11 +286,12 @@ struct SyncContentPayload {
     let wishes: [PlaceWish]
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
+    let currentStatuses: [CurrentStatusItem]
     let relationStatus: CoupleRelationStatus
     let updatedAt: Date
 
     var totalCount: Int {
-        memories.count + wishes.count + anniversaries.count + weeklyTodos.count
+        memories.count + wishes.count + anniversaries.count + weeklyTodos.count + currentStatuses.count
     }
 
     var memoryCount: Int {
@@ -309,6 +310,10 @@ struct SyncContentPayload {
         weeklyTodos.count
     }
 
+    var currentStatusCount: Int {
+        currentStatuses.count
+    }
+
     static func fromRemoteSnapshotPayload(_ payload: RemoteSyncSnapshotPayload) -> SyncContentPayload {
         SyncContentPayload(
             scope: payload.contentScope,
@@ -316,6 +321,7 @@ struct SyncContentPayload {
             wishes: payload.wishes,
             anniversaries: payload.anniversaries,
             weeklyTodos: payload.weeklyTodos,
+            currentStatuses: payload.currentStatuses,
             relationStatus: payload.relationStatus,
             updatedAt: payload.updatedAt
         )
@@ -335,6 +341,7 @@ struct RemoteSyncSnapshotPayload {
     let wishes: [PlaceWish]
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
+    let currentStatuses: [CurrentStatusItem]
     let relationStatus: CoupleRelationStatus
     let updatedAt: Date
 
@@ -402,10 +409,11 @@ struct SyncRemotePayloadSummary: Equatable {
     let wishCount: Int
     let anniversaryCount: Int
     let weeklyTodoCount: Int
+    let currentStatusCount: Int
     let updatedAt: Date
 
     var totalCount: Int {
-        memoryCount + wishCount + anniversaryCount + weeklyTodoCount
+        memoryCount + wishCount + anniversaryCount + weeklyTodoCount + currentStatusCount
     }
 
     init(
@@ -415,6 +423,7 @@ struct SyncRemotePayloadSummary: Equatable {
         wishCount: Int,
         anniversaryCount: Int,
         weeklyTodoCount: Int,
+        currentStatusCount: Int,
         updatedAt: Date
     ) {
         self.spaceId = spaceId
@@ -423,6 +432,7 @@ struct SyncRemotePayloadSummary: Equatable {
         self.wishCount = wishCount
         self.anniversaryCount = anniversaryCount
         self.weeklyTodoCount = weeklyTodoCount
+        self.currentStatusCount = currentStatusCount
         self.updatedAt = updatedAt
     }
 
@@ -433,6 +443,7 @@ struct SyncRemotePayloadSummary: Equatable {
         self.wishCount = payload.wishCount
         self.anniversaryCount = payload.anniversaryCount
         self.weeklyTodoCount = payload.weeklyTodoCount
+        self.currentStatusCount = payload.currentStatusCount
         self.updatedAt = payload.updatedAt
     }
 }
@@ -1036,6 +1047,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
     let wishes: [StoredRemoteWish]
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
+    let currentStatuses: [StoredRemoteCurrentStatus]
     let relationStatusRawValue: String?
     let updatedAt: Date?
 
@@ -1051,6 +1063,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         case wishes
         case anniversaries
         case weeklyTodos
+        case currentStatuses
         case relationStatusRawValue
         case relationStatus
         case updatedAt
@@ -1070,6 +1083,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
+        currentStatuses = try container.decodeIfPresent([StoredRemoteCurrentStatus].self, forKey: .currentStatuses) ?? []
         relationStatusRawValue = try container.decodeIfPresent(String.self, forKey: .relationStatusRawValue)
             ?? container.decodeIfPresent(String.self, forKey: .relationStatus)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
@@ -1131,6 +1145,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
             wishes: wishes.map(\.model),
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
+            currentStatuses: currentStatuses.map(\.model),
             relationStatus: relationStatus,
             updatedAt: updatedAt
         )
@@ -1648,6 +1663,7 @@ final class AppSyncService: ObservableObject {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
+        currentStatuses: [CurrentStatusItem],
         scope: AppContentScope
     ) -> SyncContentPayload {
         SyncContentPayload(
@@ -1656,6 +1672,7 @@ final class AppSyncService: ObservableObject {
             wishes: wishes,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
+            currentStatuses: currentStatuses,
             relationStatus: relationshipStore.state.relationStatus,
             updatedAt: .now
         )
@@ -1675,7 +1692,8 @@ final class AppSyncService: ObservableObject {
         memoryStore: MemoryStore,
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
-        weeklyTodoStore: WeeklyTodoStore
+        weeklyTodoStore: WeeklyTodoStore,
+        currentStatusStore: CurrentStatusStore
     ) -> Bool {
         guard sessionStore.state.sessionSource == .authenticated else {
             latestErrorText = "请先接入一份可用账号结果。"
@@ -1705,7 +1723,8 @@ final class AppSyncService: ObservableObject {
             memoryStore: memoryStore,
             wishStore: wishStore,
             anniversaryStore: anniversaryStore,
-            weeklyTodoStore: weeklyTodoStore
+            weeklyTodoStore: weeklyTodoStore,
+            currentStatusStore: currentStatusStore
         )
     }
 
@@ -1800,6 +1819,7 @@ final class AppSyncService: ObservableObject {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
+        currentStatuses: [CurrentStatusItem],
         scope: AppContentScope
     ) async -> Bool {
         isSyncing = true
@@ -1812,6 +1832,7 @@ final class AppSyncService: ObservableObject {
             wishes: wishes,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
+            currentStatuses: currentStatuses,
             scope: scope
         )
 
@@ -1891,7 +1912,8 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
-        weeklyTodos: [WeeklyTodoItem],
+        weeklyTodoStore: WeeklyTodoStore,
+        currentStatusStore: CurrentStatusStore,
         scope: AppContentScope
     ) async -> Bool {
         isSyncing = true
@@ -1902,19 +1924,22 @@ final class AppSyncService: ObservableObject {
         do {
             let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
             let context = target.context
+            let resolvedWeeklyTodos = weeklyTodoStore.items(in: target.scope)
+            let resolvedCurrentStatuses = currentStatusStore.items(in: target.scope)
             let payload = buildSnapshot(
                 memories: memories,
                 wishes: wishes,
                 anniversaries: anniversaries,
-                weeklyTodos: weeklyTodos,
+                weeklyTodos: resolvedWeeklyTodos,
+                currentStatuses: resolvedCurrentStatuses,
                 scope: target.scope
             )
-            latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot"
+            latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(resolvedWeeklyTodos.count) 条，当前状态 \(resolvedCurrentStatuses.count) 条）"
             publishStatus()
             try await realSyncProvider.pushContent(payload, context: context)
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPushAt = .now
-            latestEventText = "已发送 PUT /spaces/\(context.spaceId)/snapshot"
+            latestEventText = "已发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(resolvedWeeklyTodos.count) 条，当前状态 \(resolvedCurrentStatuses.count) 条）"
             isSyncing = false
             publishStatus()
             return true
@@ -1933,23 +1958,33 @@ final class AppSyncService: ObservableObject {
         memoryStore: MemoryStore,
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
-        weeklyTodoStore: WeeklyTodoStore
+        weeklyTodoStore: WeeklyTodoStore,
+        currentStatusStore: CurrentStatusStore
     ) -> Bool {
-        guard let latestPulledPayload, latestPulledPayload.scope == scope else {
+        guard let latestPulledPayload else {
             latestErrorText = "还没有可应用到当前空间的云端内容。"
             latestEventText = "请先拉取最近云端内容"
             publishStatus()
             return false
         }
 
-        memoryStore.replaceEntries(in: scope, with: latestPulledPayload.memories)
-        wishStore.replaceWishes(in: scope, with: latestPulledPayload.wishes)
-        anniversaryStore.replaceAnniversaries(in: scope, with: latestPulledPayload.anniversaries)
-        weeklyTodoStore.replaceItems(in: scope, with: latestPulledPayload.weeklyTodos)
+        guard latestPulledPayload.scope.spaceId == scope.spaceId else {
+            latestErrorText = "这份云端内容不属于当前共享空间。"
+            latestEventText = "请先切回对应空间后再应用"
+            publishStatus()
+            return false
+        }
+
+        let applyScope = latestPulledPayload.scope
+        memoryStore.replaceEntries(in: applyScope, with: latestPulledPayload.memories)
+        wishStore.replaceWishes(in: applyScope, with: latestPulledPayload.wishes)
+        anniversaryStore.replaceAnniversaries(in: applyScope, with: latestPulledPayload.anniversaries)
+        weeklyTodoStore.replaceItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
+        currentStatusStore.replaceStatuses(in: applyScope, with: latestPulledPayload.currentStatuses)
 
         lastAppliedAt = .now
         latestErrorText = nil
-        latestEventText = "已将最近云端内容应用到当前空间"
+        latestEventText = "已将最近云端内容应用到当前空间（本周事项 \(latestPulledPayload.weeklyTodos.count) 条，当前状态 \(latestPulledPayload.currentStatuses.count) 条）"
         publishStatus()
         return true
     }
@@ -1960,7 +1995,8 @@ final class AppSyncService: ObservableObject {
         memoryStore: MemoryStore,
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
-        weeklyTodoStore: WeeklyTodoStore
+        weeklyTodoStore: WeeklyTodoStore,
+        currentStatusStore: CurrentStatusStore
     ) async -> Bool {
         isSyncing = true
         latestErrorText = nil
@@ -1983,12 +2019,13 @@ final class AppSyncService: ObservableObject {
                 memoryStore: memoryStore,
                 wishStore: wishStore,
                 anniversaryStore: anniversaryStore,
-                weeklyTodoStore: weeklyTodoStore
+                weeklyTodoStore: weeklyTodoStore,
+                currentStatusStore: currentStatusStore
             )
 
             if didApply {
                 latestErrorText = nil
-                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照"
+                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照（本周事项 \(payload.weeklyTodos.count) 条，当前状态 \(payload.currentStatuses.count) 条）"
             }
 
             isSyncing = false
@@ -2084,8 +2121,20 @@ private struct StoredRemotePayload: Codable {
     let wishes: [StoredRemoteWish]
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
+    let currentStatuses: [StoredRemoteCurrentStatus]
     let relationStatusRawValue: String
     let updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case memories
+        case wishes
+        case anniversaries
+        case weeklyTodos
+        case currentStatuses
+        case relationStatusRawValue
+        case updatedAt
+    }
 
     init(payload: SyncContentPayload) {
         scope = StoredAppContentScope(scope: payload.scope)
@@ -2093,8 +2142,21 @@ private struct StoredRemotePayload: Codable {
         wishes = payload.wishes.map(StoredRemoteWish.init)
         anniversaries = payload.anniversaries.map(StoredRemoteAnniversary.init)
         weeklyTodos = payload.weeklyTodos.map(StoredRemoteWeeklyTodo.init)
+        currentStatuses = payload.currentStatuses.map(StoredRemoteCurrentStatus.init)
         relationStatusRawValue = payload.relationStatus.rawValue
         updatedAt = payload.updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        scope = try container.decode(StoredAppContentScope.self, forKey: .scope)
+        memories = try container.decodeIfPresent([StoredRemoteMemory].self, forKey: .memories) ?? []
+        wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
+        anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
+        weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
+        currentStatuses = try container.decodeIfPresent([StoredRemoteCurrentStatus].self, forKey: .currentStatuses) ?? []
+        relationStatusRawValue = try container.decode(String.self, forKey: .relationStatusRawValue)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 
     var summary: SyncRemotePayloadSummary {
@@ -2105,6 +2167,7 @@ private struct StoredRemotePayload: Codable {
             wishCount: wishes.count,
             anniversaryCount: anniversaries.count,
             weeklyTodoCount: weeklyTodos.count,
+            currentStatusCount: currentStatuses.count,
             updatedAt: updatedAt
         )
     }
@@ -2116,6 +2179,7 @@ private struct StoredRemotePayload: Codable {
             wishes: wishes.map(\.model),
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
+            currentStatuses: currentStatuses.map(\.model),
             relationStatus: CoupleRelationStatus(rawValue: relationStatusRawValue) ?? .unpaired,
             updatedAt: updatedAt
         )
@@ -2332,6 +2396,38 @@ private struct StoredRemoteWeeklyTodo: Codable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
+        )
+    }
+}
+
+private struct StoredRemoteCurrentStatus: Codable {
+    let id: UUID
+    let userId: String
+    let displayText: String
+    let toneRawValue: String
+    let effectiveScopeRawValue: String
+    let spaceId: String
+    let updatedAt: Date
+
+    init(_ item: CurrentStatusItem) {
+        id = item.id
+        userId = item.userId
+        displayText = item.displayText
+        toneRawValue = item.tone.rawValue
+        effectiveScopeRawValue = item.effectiveScope.rawValue
+        spaceId = item.spaceId
+        updatedAt = item.updatedAt
+    }
+
+    var model: CurrentStatusItem {
+        CurrentStatusItem(
+            id: id,
+            userId: userId,
+            displayText: displayText,
+            tone: StatusTone(rawValue: toneRawValue) ?? .softGreen,
+            effectiveScope: CurrentStatusEffectiveScope(rawValue: effectiveScopeRawValue) ?? .today,
+            spaceId: spaceId,
+            updatedAt: updatedAt
         )
     }
 }

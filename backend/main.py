@@ -188,6 +188,18 @@ class StoredRemoteWeeklyTodoModel(BaseModel):
     syncStatusRawValue: str
 
 
+class StoredRemoteCurrentStatusModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    userId: str
+    displayText: str
+    toneRawValue: str
+    effectiveScopeRawValue: str
+    spaceId: str
+    updatedAt: datetime
+
+
 class StoredScopeModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -205,6 +217,7 @@ class StoredSnapshotRequestModel(BaseModel):
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
+    currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
     relationStatusRawValue: str
     updatedAt: datetime
 
@@ -221,6 +234,7 @@ class RemoteSnapshotResponseModel(BaseModel):
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
+    currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
     relationStatus: str
     updatedAt: datetime
 
@@ -233,6 +247,7 @@ class SnapshotRecordModel(BaseModel):
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
+    currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
     relationStatus: str
     updatedAt: datetime
     lastUpdatedByAccountId: str | None = None
@@ -442,6 +457,7 @@ def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordMo
         wishes=[],
         anniversaries=[],
         weeklyTodos=[],
+        currentStatuses=[],
         relationStatus="paired",
         updatedAt=utc_now(),
         lastUpdatedByAccountId=account.account_id,
@@ -455,6 +471,7 @@ def make_snapshot_record(space_id: str, account: Account, relation_status: str) 
         wishes=[],
         anniversaries=[],
         weeklyTodos=[],
+        currentStatuses=[],
         relationStatus=relation_status,
         updatedAt=utc_now(),
         lastUpdatedByAccountId=account.account_id,
@@ -480,6 +497,7 @@ def build_snapshot_response(session: Session, space: Space, account: Account) ->
         wishes=snapshot.wishes,
         anniversaries=snapshot.anniversaries,
         weeklyTodos=snapshot.weeklyTodos,
+        currentStatuses=snapshot.currentStatuses,
         relationStatus=snapshot.relationStatus,
         updatedAt=snapshot.updatedAt,
     ).model_dump(mode="json")
@@ -511,6 +529,7 @@ def normalize_snapshot_payload(
             wishes=stored_payload.wishes,
             anniversaries=stored_payload.anniversaries,
             weeklyTodos=stored_payload.weeklyTodos,
+            currentStatuses=stored_payload.currentStatuses,
             relationStatus=stored_payload.relationStatusRawValue,
             updatedAt=utc_now(),
             lastUpdatedByAccountId=account.account_id,
@@ -546,6 +565,7 @@ def normalize_snapshot_payload(
             wishes=remote_payload.wishes,
             anniversaries=remote_payload.anniversaries,
             weeklyTodos=remote_payload.weeklyTodos,
+            currentStatuses=remote_payload.currentStatuses,
             relationStatus=remote_payload.relationStatus,
             updatedAt=utc_now(),
             lastUpdatedByAccountId=account.account_id,

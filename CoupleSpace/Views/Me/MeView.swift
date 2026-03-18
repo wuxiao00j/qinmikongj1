@@ -521,6 +521,7 @@ private struct AccountSyncStatusView: View {
             wishes: wishStore.wishes(in: contentScope),
             anniversaries: anniversaryStore.anniversaries(in: contentScope),
             weeklyTodos: weeklyTodoItems,
+            currentStatuses: currentStatuses,
             scope: contentScope
         )
 
@@ -572,7 +573,7 @@ private struct AccountSyncStatusView: View {
                     SpaceInsight(
                         title: "内容快照",
                         value: "\(snapshot.totalCount) 条",
-                        note: "这里汇总了当前空间里的 \(snapshot.memoryCount) 段生活记录、\(snapshot.wishCount) 个愿望、\(snapshot.anniversaryCount) 个纪念日和 \(snapshot.weeklyTodoCount) 条本周事项。"
+                        note: "这里汇总了当前空间里的 \(snapshot.memoryCount) 段生活记录、\(snapshot.wishCount) 个愿望、\(snapshot.anniversaryCount) 个纪念日、\(snapshot.weeklyTodoCount) 条本周事项和 \(snapshot.currentStatusCount) 条当前状态。"
                     )
                 )
 
@@ -963,7 +964,8 @@ private struct AccountSyncStatusView: View {
                             memories: memoryStore.entries(in: contentScope),
                             wishes: wishStore.wishes(in: contentScope),
                             anniversaries: anniversaryStore.anniversaries(in: contentScope),
-                            weeklyTodos: weeklyTodoItems,
+                            weeklyTodoStore: weeklyTodoStore,
+                            currentStatusStore: currentStatusStore,
                             scope: contentScope
                         )
                     }
@@ -987,7 +989,8 @@ private struct AccountSyncStatusView: View {
                             memoryStore: memoryStore,
                             wishStore: wishStore,
                             anniversaryStore: anniversaryStore,
-                            weeklyTodoStore: weeklyTodoStore
+                            weeklyTodoStore: weeklyTodoStore,
+                            currentStatusStore: currentStatusStore
                         )
                     }
                 } label: {
@@ -1006,7 +1009,8 @@ private struct AccountSyncStatusView: View {
                         memories: memoryStore.entries(in: contentScope),
                         wishes: wishStore.wishes(in: contentScope),
                         anniversaries: anniversaryStore.anniversaries(in: contentScope),
-                        weeklyTodos: weeklyTodoItems
+                        weeklyTodos: weeklyTodoItems,
+                        currentStatuses: currentStatuses
                     )
 
                     _ = syncService.rehearseRemoteSnapshotPayload(
@@ -1015,7 +1019,8 @@ private struct AccountSyncStatusView: View {
                         memoryStore: memoryStore,
                         wishStore: wishStore,
                         anniversaryStore: anniversaryStore,
-                        weeklyTodoStore: weeklyTodoStore
+                        weeklyTodoStore: weeklyTodoStore,
+                        currentStatusStore: currentStatusStore
                     )
                 } label: {
                     PageActionPill(text: "本地演练同步返回", systemImage: "square.and.arrow.down")
@@ -1228,6 +1233,7 @@ private enum AccountSyncRehearsalFixtures {
     private static let remoteMemoryID = UUID(uuidString: "1D27798A-0C77-44B5-A862-B2FC387A7E16")!
     private static let remoteWishID = UUID(uuidString: "39FA9A60-4E54-455F-A900-C1FC31B48E0F")!
     private static let remoteAnniversaryID = UUID(uuidString: "98E1E0B9-6FAF-4A0E-8B4F-C8A66879AA50")!
+    private static let remoteCurrentStatusID = UUID(uuidString: "F1A77AA1-77C0-45AC-A562-B0E670B5E8E9")!
 
     static func authenticatedPayload(currentNickname: String) -> AuthenticatedAccountPayload {
         let trimmedName = currentNickname.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1251,7 +1257,8 @@ private enum AccountSyncRehearsalFixtures {
         memories: [MemoryTimelineEntry],
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
-        weeklyTodos: [WeeklyTodoItem]
+        weeklyTodos: [WeeklyTodoItem],
+        currentStatuses: [CurrentStatusItem]
     ) -> RemoteSyncSnapshotPayload {
         let now = Date()
         let rehearsalMemory = MemoryTimelineEntry(
@@ -1311,6 +1318,15 @@ private enum AccountSyncRehearsalFixtures {
             updatedAt: now,
             syncStatus: .synced
         )
+        let rehearsalCurrentStatus = CurrentStatusItem(
+            id: remoteCurrentStatusID,
+            userId: scope.partnerUserId ?? scope.currentUserId,
+            displayText: "云端返回演练：想你，等你一起吃饭",
+            tone: .powderPink,
+            effectiveScope: .today,
+            spaceId: scope.spaceId,
+            updatedAt: now
+        )
 
         return RemoteSyncSnapshotPayload(
             snapshotId: "remote-snapshot-rehearsal-\(scope.spaceId)",
@@ -1322,6 +1338,7 @@ private enum AccountSyncRehearsalFixtures {
             wishes: merging(rehearsalWish, into: markAsSynced(wishes, updatedAt: now)),
             anniversaries: merging(rehearsalAnniversary, into: markAsSynced(anniversaries, updatedAt: now)),
             weeklyTodos: merging(rehearsalWeeklyTodo, into: markAsSynced(weeklyTodos, updatedAt: now)),
+            currentStatuses: merging(rehearsalCurrentStatus, into: markAsSynced(currentStatuses, updatedAt: now)),
             relationStatus: relationship.relationStatus,
             updatedAt: now
         )
@@ -1340,6 +1357,10 @@ private enum AccountSyncRehearsalFixtures {
     }
 
     private static func merging(_ rehearsalItem: WeeklyTodoItem, into items: [WeeklyTodoItem]) -> [WeeklyTodoItem] {
+        [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
+    }
+
+    private static func merging(_ rehearsalItem: CurrentStatusItem, into items: [CurrentStatusItem]) -> [CurrentStatusItem] {
         [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
     }
 
@@ -1417,6 +1438,20 @@ private enum AccountSyncRehearsalFixtures {
                 createdAt: item.createdAt,
                 updatedAt: updatedAt,
                 syncStatus: .synced
+            )
+        }
+    }
+
+    private static func markAsSynced(_ items: [CurrentStatusItem], updatedAt: Date) -> [CurrentStatusItem] {
+        items.map { item in
+            CurrentStatusItem(
+                id: item.id,
+                userId: item.userId,
+                displayText: item.displayText,
+                tone: item.tone,
+                effectiveScope: item.effectiveScope,
+                spaceId: item.spaceId,
+                updatedAt: updatedAt
             )
         }
     }
