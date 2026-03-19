@@ -1436,6 +1436,7 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
             body: nil,
             contentType: nil
         )
+        request.timeoutInterval = max(request.timeoutInterval, 120)
         request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
         request.setValue(String(data.count), forHTTPHeaderField: "Content-Length")
 
@@ -1456,12 +1457,24 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
                 operation: "uploadMemoryAsset",
                 detail: "上传任务在发送过程中被取消了"
             )
+        } catch let urlError as URLError {
+            debugMemoryAssetSync(
+                "upload request urlError memory=\(memoryID.uuidString.lowercased()) code=\(urlError.code.rawValue) detail=\(urlError.localizedDescription)"
+            )
+            throw mapRequestFailure(urlError, operation: "uploadMemoryAsset")
         } catch {
             debugMemoryAssetSync("upload request failed memory=\(memoryID.uuidString.lowercased()) error=\(error.localizedDescription)")
             throw mapRequestFailure(error, operation: "uploadMemoryAsset")
         }
 
+        debugMemoryAssetSync(
+            "upload response received memory=\(memoryID.uuidString.lowercased()) status=\(response.statusCode) bytes=\(responseData.count)"
+        )
+
         guard (200...299).contains(response.statusCode) else {
+            debugMemoryAssetSync(
+                "upload response unexpected memory=\(memoryID.uuidString.lowercased()) status=\(response.statusCode) body=\(responseBodyPreview(from: responseData) ?? "nil")"
+            )
             throw RealSyncRemoteProviderError.unexpectedStatusCode(
                 operation: "uploadMemoryAsset",
                 statusCode: response.statusCode,

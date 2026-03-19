@@ -558,6 +558,77 @@ def write_memory_asset_file(storage_key: str, body: bytes) -> Path:
     return destination
 
 
+def memory_asset_file_path(storage_key: str) -> Path:
+    destination = memory_asset_storage_root() / storage_key
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return destination
+
+
+async def stream_memory_asset_file(
+    request: Request,
+    destination: Path,
+    *,
+    max_bytes: int,
+    space_id: str,
+    memory_id: str,
+) -> tuple[int, str]:
+    temp_destination = destination.with_suffix(f"{destination.suffix}.part")
+    if temp_destination.exists():
+        temp_destination.unlink()
+
+    received_bytes = 0
+    checksum = hashlib.sha256()
+
+    try:
+        with temp_destination.open("wb") as handle:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+
+                received_bytes += len(chunk)
+                if received_bytes > max_bytes:
+                    raise APIError(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        code="memory_asset_too_large",
+                        message="图片暂时超过当前测试环境允许的大小。",
+                        detail={"maxBytes": max_bytes, "receivedBytes": received_bytes},
+                    )
+
+                checksum.update(chunk)
+                handle.write(chunk)
+
+            handle.flush()
+    except ClientDisconnect as error:
+        temp_destination.unlink(missing_ok=True)
+        logger.warning(
+            "memory asset upload disconnected space=%s memory=%s received_bytes=%s error=%s",
+            space_id,
+            memory_id,
+            received_bytes,
+            error.__class__.__name__,
+        )
+        raise APIError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="client_disconnected",
+            message="图片上传在传输过程中中断，请稍后重试。",
+            detail={"receivedBytes": received_bytes},
+        ) from error
+    except Exception:
+        temp_destination.unlink(missing_ok=True)
+        raise
+
+    if received_bytes == 0:
+        temp_destination.unlink(missing_ok=True)
+        raise APIError(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="empty_upload_body",
+            message="图片上传内容不能为空。",
+        )
+
+    temp_destination.replace(destination)
+    return received_bytes, checksum.hexdigest()
+
+
 def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordModel:
     return SnapshotRecordModel(
         snapshotId=f"snapshot-{space_id}-{uuid4().hex[:12]}",
@@ -1119,51 +1190,43 @@ async def upload_memory_asset(
         )
 
     extension = resolve_memory_asset_extension(mime_type)
+    content_length = request.headers.get("Content-Length")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = None
+        else:
+            if declared_length > settings.memory_asset_max_bytes:
+                raise APIError(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    code="memory_asset_too_large",
+                    message="图片暂时超过当前测试环境允许的大小。",
+                    detail={"maxBytes": settings.memory_asset_max_bytes, "contentLength": declared_length},
+                )
+
+    asset_id = f"asset-{uuid4().hex[:24]}"
+    storage_key = build_memory_asset_storage_key(space_id, asset_id, extension)
+    destination = memory_asset_file_path(storage_key)
     logger.info(
         "memory asset upload reading body space=%s memory=%s content_length=%s",
         space_id,
         normalized_memory_id,
-        request.headers.get("Content-Length"),
+        content_length,
     )
-    try:
-        body = await request.body()
-        logger.info(
-            "memory asset upload body ready space=%s memory=%s bytes=%s",
-            space_id,
-            normalized_memory_id,
-            len(body),
-        )
-    except ClientDisconnect as error:
-        logger.warning(
-            "memory asset upload disconnected space=%s memory=%s error=%s",
-            space_id,
-            normalized_memory_id,
-            error.__class__.__name__,
-        )
-        raise APIError(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code="client_disconnected",
-            message="图片上传在传输过程中中断，请稍后重试。",
-        ) from error
-    if not body:
-        raise APIError(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            code="empty_upload_body",
-            message="图片上传内容不能为空。",
-        )
-
-    if len(body) > settings.memory_asset_max_bytes:
-        raise APIError(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            code="memory_asset_too_large",
-            message="图片暂时超过当前测试环境允许的大小。",
-            detail={"maxBytes": settings.memory_asset_max_bytes},
-        )
-
-    asset_id = f"asset-{uuid4().hex[:24]}"
-    storage_key = build_memory_asset_storage_key(space_id, asset_id, extension)
-    checksum = hashlib.sha256(body).hexdigest()
-    write_memory_asset_file(storage_key, body)
+    byte_size, checksum = await stream_memory_asset_file(
+        request,
+        destination,
+        max_bytes=settings.memory_asset_max_bytes,
+        space_id=space_id,
+        memory_id=normalized_memory_id,
+    )
+    logger.info(
+        "memory asset upload body ready space=%s memory=%s bytes=%s",
+        space_id,
+        normalized_memory_id,
+        byte_size,
+    )
 
     asset = MemoryAsset(
         asset_id=asset_id,
@@ -1171,7 +1234,7 @@ async def upload_memory_asset(
         space_id=space_id,
         storage_key=storage_key,
         mime_type=mime_type,
-        byte_size=len(body),
+        byte_size=byte_size,
         checksum=checksum,
         width=None,
         height=None,
@@ -1187,7 +1250,7 @@ async def upload_memory_asset(
         space_id,
         normalized_memory_id,
         asset_id,
-        len(body),
+        byte_size,
     )
 
     return build_memory_asset_upload_response(asset)
