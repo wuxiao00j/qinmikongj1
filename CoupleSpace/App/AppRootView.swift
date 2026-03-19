@@ -78,6 +78,7 @@ struct AppRootView: View {
                     anniversaryStore: anniversaryStore,
                     weeklyTodoStore: weeklyTodoStore,
                     tonightDinnerStore: tonightDinnerStore,
+                    ritualStore: ritualStore,
                     currentStatusStore: currentStatusStore,
                     whisperNoteStore: whisperNoteStore,
                     trigger: .appBecameActive
@@ -101,6 +102,9 @@ struct AppRootView: View {
         }
         .onReceive(tonightDinnerStore.$items.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .tonightDinnersChanged)
+        }
+        .onReceive(ritualStore.$items.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .ritualsChanged)
         }
         .onReceive(currentStatusStore.$items.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .currentStatusesChanged)
@@ -156,6 +160,7 @@ struct AppRootView: View {
             anniversaries: anniversaryStore.anniversaries(in: scope),
             weeklyTodos: weeklyTodoStore.items(in: scope),
             tonightDinners: tonightDinnerStore.items(in: scope),
+            rituals: ritualStore.items(in: scope),
             currentStatuses: currentStatusStore.items(in: scope),
             whisperNotes: whisperNoteStore.items(in: scope),
             scope: scope,

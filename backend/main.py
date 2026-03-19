@@ -218,6 +218,21 @@ class StoredRemoteTonightDinnerModel(BaseModel):
     syncStatusRawValue: str
 
 
+class StoredRemoteRitualModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    kindRawValue: str
+    isCompleted: bool
+    note: str
+    createdAt: datetime
+    updatedAt: datetime
+    createdByUserId: str
+    spaceId: str
+    syncStatusRawValue: str
+
+
 class StoredRemoteWhisperNoteModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -247,6 +262,7 @@ class StoredSnapshotRequestModel(BaseModel):
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     tonightDinners: list[StoredRemoteTonightDinnerModel] = Field(default_factory=list)
+    rituals: list[StoredRemoteRitualModel] = Field(default_factory=list)
     currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
     whisperNotes: list[StoredRemoteWhisperNoteModel] = Field(default_factory=list)
     relationStatusRawValue: str
@@ -266,6 +282,7 @@ class RemoteSnapshotResponseModel(BaseModel):
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     tonightDinners: list[StoredRemoteTonightDinnerModel] = Field(default_factory=list)
+    rituals: list[StoredRemoteRitualModel] = Field(default_factory=list)
     currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
     whisperNotes: list[StoredRemoteWhisperNoteModel] = Field(default_factory=list)
     relationStatus: str
@@ -281,6 +298,7 @@ class SnapshotRecordModel(BaseModel):
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     tonightDinners: list[StoredRemoteTonightDinnerModel] = Field(default_factory=list)
+    rituals: list[StoredRemoteRitualModel] = Field(default_factory=list)
     currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
     whisperNotes: list[StoredRemoteWhisperNoteModel] = Field(default_factory=list)
     relationStatus: str
@@ -493,6 +511,7 @@ def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordMo
         anniversaries=[],
         weeklyTodos=[],
         tonightDinners=[],
+        rituals=[],
         currentStatuses=[],
         whisperNotes=[],
         relationStatus="paired",
@@ -509,6 +528,7 @@ def make_snapshot_record(space_id: str, account: Account, relation_status: str) 
         anniversaries=[],
         weeklyTodos=[],
         tonightDinners=[],
+        rituals=[],
         currentStatuses=[],
         whisperNotes=[],
         relationStatus=relation_status,
@@ -543,6 +563,7 @@ def build_snapshot_response(session: Session, space: Space, account: Account) ->
         anniversaries=snapshot.anniversaries,
         weeklyTodos=snapshot.weeklyTodos,
         tonightDinners=snapshot.tonightDinners,
+        rituals=snapshot.rituals,
         currentStatuses=snapshot.currentStatuses,
         whisperNotes=snapshot.whisperNotes,
         relationStatus=snapshot.relationStatus,
@@ -583,6 +604,7 @@ def normalize_snapshot_payload(
             anniversaries=stored_payload.anniversaries,
             weeklyTodos=stored_payload.weeklyTodos,
             tonightDinners=stored_payload.tonightDinners,
+            rituals=stored_payload.rituals,
             currentStatuses=stored_payload.currentStatuses,
             whisperNotes=stored_payload.whisperNotes,
             relationStatus=stored_payload.relationStatusRawValue,
@@ -627,6 +649,7 @@ def normalize_snapshot_payload(
             anniversaries=remote_payload.anniversaries,
             weeklyTodos=remote_payload.weeklyTodos,
             tonightDinners=remote_payload.tonightDinners,
+            rituals=remote_payload.rituals,
             currentStatuses=remote_payload.currentStatuses,
             whisperNotes=remote_payload.whisperNotes,
             relationStatus=remote_payload.relationStatus,
