@@ -311,13 +311,14 @@ struct SyncContentPayload {
     let wishes: [PlaceWish]
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
+    let tonightDinners: [TonightDinnerOption]
     let currentStatuses: [CurrentStatusItem]
     let whisperNotes: [WhisperNoteItem]
     let relationStatus: CoupleRelationStatus
     let updatedAt: Date
 
     var totalCount: Int {
-        memories.count + wishes.count + anniversaries.count + weeklyTodos.count + currentStatuses.count + whisperNotes.count
+        memories.count + wishes.count + anniversaries.count + weeklyTodos.count + tonightDinners.count + currentStatuses.count + whisperNotes.count
     }
 
     var memoryCount: Int {
@@ -336,6 +337,10 @@ struct SyncContentPayload {
         weeklyTodos.count
     }
 
+    var tonightDinnerCount: Int {
+        tonightDinners.count
+    }
+
     var currentStatusCount: Int {
         currentStatuses.count
     }
@@ -351,6 +356,7 @@ struct SyncContentPayload {
             wishes: payload.wishes,
             anniversaries: payload.anniversaries,
             weeklyTodos: payload.weeklyTodos,
+            tonightDinners: payload.tonightDinners,
             currentStatuses: payload.currentStatuses,
             whisperNotes: payload.whisperNotes,
             relationStatus: payload.relationStatus,
@@ -372,6 +378,7 @@ struct RemoteSyncSnapshotPayload {
     let wishes: [PlaceWish]
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
+    let tonightDinners: [TonightDinnerOption]
     let currentStatuses: [CurrentStatusItem]
     let whisperNotes: [WhisperNoteItem]
     let relationStatus: CoupleRelationStatus
@@ -443,12 +450,13 @@ struct SyncRemotePayloadSummary: Equatable {
     let wishCount: Int
     let anniversaryCount: Int
     let weeklyTodoCount: Int
+    let tonightDinnerCount: Int
     let currentStatusCount: Int
     let whisperNoteCount: Int
     let updatedAt: Date
 
     var totalCount: Int {
-        memoryCount + wishCount + anniversaryCount + weeklyTodoCount + currentStatusCount + whisperNoteCount
+        memoryCount + wishCount + anniversaryCount + weeklyTodoCount + tonightDinnerCount + currentStatusCount + whisperNoteCount
     }
 
     init(
@@ -458,6 +466,7 @@ struct SyncRemotePayloadSummary: Equatable {
         wishCount: Int,
         anniversaryCount: Int,
         weeklyTodoCount: Int,
+        tonightDinnerCount: Int,
         currentStatusCount: Int,
         whisperNoteCount: Int,
         updatedAt: Date
@@ -468,6 +477,7 @@ struct SyncRemotePayloadSummary: Equatable {
         self.wishCount = wishCount
         self.anniversaryCount = anniversaryCount
         self.weeklyTodoCount = weeklyTodoCount
+        self.tonightDinnerCount = tonightDinnerCount
         self.currentStatusCount = currentStatusCount
         self.whisperNoteCount = whisperNoteCount
         self.updatedAt = updatedAt
@@ -480,6 +490,7 @@ struct SyncRemotePayloadSummary: Equatable {
         self.wishCount = payload.wishCount
         self.anniversaryCount = payload.anniversaryCount
         self.weeklyTodoCount = payload.weeklyTodoCount
+        self.tonightDinnerCount = payload.tonightDinnerCount
         self.currentStatusCount = payload.currentStatusCount
         self.whisperNoteCount = payload.whisperNoteCount
         self.updatedAt = payload.updatedAt
@@ -489,6 +500,7 @@ struct SyncRemotePayloadSummary: Equatable {
 enum AutomaticSyncTrigger: String {
     case wishesChanged
     case weeklyTodosChanged
+    case tonightDinnersChanged
     case currentStatusesChanged
     case whisperNotesChanged
     case appBecameActive
@@ -501,6 +513,8 @@ enum AutomaticSyncTrigger: String {
             return "已自动同步最新愿望改动到测试环境"
         case .weeklyTodosChanged:
             return "已自动同步最新本周事项到测试环境"
+        case .tonightDinnersChanged:
+            return "已自动同步最新今晚吃什么到测试环境"
         case .currentStatusesChanged:
             return "已自动同步最新当前状态到测试环境"
         case .whisperNotesChanged:
@@ -518,7 +532,7 @@ enum AutomaticSyncTrigger: String {
             return "已在进入“我的”页时检查最近云端快照"
         case .accountSyncAppeared:
             return "已在进入“账号与同步”页时检查最近云端快照"
-        case .wishesChanged, .weeklyTodosChanged, .currentStatusesChanged, .whisperNotesChanged:
+        case .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .currentStatusesChanged, .whisperNotesChanged:
             return "已检查最近云端快照"
         }
     }
@@ -1123,6 +1137,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
     let wishes: [StoredRemoteWish]
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
+    let tonightDinners: [StoredRemoteTonightDinner]
     let currentStatuses: [StoredRemoteCurrentStatus]
     let whisperNotes: [StoredRemoteWhisperNote]
     let relationStatusRawValue: String?
@@ -1140,6 +1155,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         case wishes
         case anniversaries
         case weeklyTodos
+        case tonightDinners
         case currentStatuses
         case whisperNotes
         case relationStatusRawValue
@@ -1161,6 +1177,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
+        tonightDinners = try container.decodeIfPresent([StoredRemoteTonightDinner].self, forKey: .tonightDinners) ?? []
         currentStatuses = try container.decodeIfPresent([StoredRemoteCurrentStatus].self, forKey: .currentStatuses) ?? []
         whisperNotes = try container.decodeIfPresent([StoredRemoteWhisperNote].self, forKey: .whisperNotes) ?? []
         relationStatusRawValue = try container.decodeIfPresent(String.self, forKey: .relationStatusRawValue)
@@ -1224,6 +1241,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
             wishes: wishes.map(\.model),
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
+            tonightDinners: tonightDinners.map(\.model),
             currentStatuses: currentStatuses.map(\.model),
             whisperNotes: whisperNotes.map(\.model),
             relationStatus: relationStatus,
@@ -1769,6 +1787,7 @@ final class AppSyncService: ObservableObject {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
+        tonightDinners: [TonightDinnerOption],
         currentStatuses: [CurrentStatusItem],
         whisperNotes: [WhisperNoteItem],
         scope: AppContentScope,
@@ -1785,6 +1804,7 @@ final class AppSyncService: ObservableObject {
             wishes: wishes,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
+            tonightDinners: tonightDinners,
             currentStatuses: currentStatuses,
             whisperNotes: whisperNotes,
             scope: scope
@@ -1813,6 +1833,7 @@ final class AppSyncService: ObservableObject {
                 wishes: wishes,
                 anniversaries: anniversaries,
                 weeklyTodos: weeklyTodos,
+                tonightDinners: tonightDinners,
                 currentStatuses: currentStatuses,
                 whisperNotes: whisperNotes,
                 scope: scope,
@@ -1831,6 +1852,7 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
         currentStatusStore: CurrentStatusStore,
         whisperNoteStore: WhisperNoteStore,
         trigger: AutomaticSyncTrigger
@@ -1872,6 +1894,7 @@ final class AppSyncService: ObservableObject {
                 wishStore: wishStore,
                 anniversaryStore: anniversaryStore,
                 weeklyTodoStore: weeklyTodoStore,
+                tonightDinnerStore: tonightDinnerStore,
                 currentStatusStore: currentStatusStore,
                 whisperNoteStore: whisperNoteStore,
                 eventTextOverride: "已自动应用最近共享内容"
@@ -1888,6 +1911,7 @@ final class AppSyncService: ObservableObject {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
+        tonightDinners: [TonightDinnerOption],
         currentStatuses: [CurrentStatusItem],
         whisperNotes: [WhisperNoteItem],
         scope: AppContentScope
@@ -1898,6 +1922,7 @@ final class AppSyncService: ObservableObject {
             wishes: wishes,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
+            tonightDinners: tonightDinners,
             currentStatuses: currentStatuses,
             whisperNotes: whisperNotes,
             relationStatus: relationshipStore.state.relationStatus,
@@ -1920,6 +1945,7 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
         currentStatusStore: CurrentStatusStore,
         whisperNoteStore: WhisperNoteStore
     ) -> Bool {
@@ -1952,6 +1978,7 @@ final class AppSyncService: ObservableObject {
             wishStore: wishStore,
             anniversaryStore: anniversaryStore,
             weeklyTodoStore: weeklyTodoStore,
+            tonightDinnerStore: tonightDinnerStore,
             currentStatusStore: currentStatusStore,
             whisperNoteStore: whisperNoteStore
         )
@@ -2048,6 +2075,7 @@ final class AppSyncService: ObservableObject {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
+        tonightDinners: [TonightDinnerOption],
         currentStatuses: [CurrentStatusItem],
         whisperNotes: [WhisperNoteItem],
         scope: AppContentScope
@@ -2062,6 +2090,7 @@ final class AppSyncService: ObservableObject {
             wishes: wishes,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
+            tonightDinners: tonightDinners,
             currentStatuses: currentStatuses,
             whisperNotes: whisperNotes,
             scope: scope
@@ -2170,11 +2199,13 @@ final class AppSyncService: ObservableObject {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
         currentStatusStore: CurrentStatusStore,
         whisperNoteStore: WhisperNoteStore,
         scope: AppContentScope
     ) async -> Bool {
         let resolvedWeeklyTodos = weeklyTodoStore.items(in: scope)
+        let resolvedTonightDinners = tonightDinnerStore.items(in: scope)
         let resolvedCurrentStatuses = currentStatusStore.items(in: scope)
         let resolvedWhisperNotes = whisperNoteStore.items(in: scope)
 
@@ -2183,6 +2214,7 @@ final class AppSyncService: ObservableObject {
             wishes: wishes,
             anniversaries: anniversaries,
             weeklyTodos: resolvedWeeklyTodos,
+            tonightDinners: resolvedTonightDinners,
             currentStatuses: resolvedCurrentStatuses,
             whisperNotes: resolvedWhisperNotes,
             scope: scope,
@@ -2197,6 +2229,7 @@ final class AppSyncService: ObservableObject {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
+        tonightDinners: [TonightDinnerOption],
         currentStatuses: [CurrentStatusItem],
         whisperNotes: [WhisperNoteItem],
         scope: AppContentScope,
@@ -2220,20 +2253,21 @@ final class AppSyncService: ObservableObject {
                 wishes: wishes,
                 anniversaries: anniversaries,
                 weeklyTodos: weeklyTodos,
+                tonightDinners: tonightDinners,
                 currentStatuses: currentStatuses,
                 whisperNotes: whisperNotes,
                 scope: target.scope
             )
             debugWhisperSync("prepare push snapshot space=\(target.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
             if eventTextOverride == nil {
-                latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
+                latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
             }
             publishStatus()
             try await realSyncProvider.pushContent(payload, context: context)
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPushAt = .now
             latestEventText = eventTextOverride
-                ?? "已发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
+                ?? "已发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
             if shouldRecordErrors {
                 latestErrorText = nil
             }
@@ -2258,6 +2292,7 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
         currentStatusStore: CurrentStatusStore,
         whisperNoteStore: WhisperNoteStore
     ) -> Bool {
@@ -2267,6 +2302,7 @@ final class AppSyncService: ObservableObject {
             wishStore: wishStore,
             anniversaryStore: anniversaryStore,
             weeklyTodoStore: weeklyTodoStore,
+            tonightDinnerStore: tonightDinnerStore,
             currentStatusStore: currentStatusStore,
             whisperNoteStore: whisperNoteStore,
             eventTextOverride: nil
@@ -2280,6 +2316,7 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
         currentStatusStore: CurrentStatusStore,
         whisperNoteStore: WhisperNoteStore,
         eventTextOverride: String?
@@ -2305,6 +2342,7 @@ final class AppSyncService: ObservableObject {
         wishStore.replaceWishes(in: applyScope, with: latestPulledPayload.wishes)
         anniversaryStore.replaceAnniversaries(in: applyScope, with: latestPulledPayload.anniversaries)
         weeklyTodoStore.replaceItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
+        tonightDinnerStore.replaceItems(in: applyScope, with: latestPulledPayload.tonightDinners)
         currentStatusStore.replaceStatuses(in: applyScope, with: latestPulledPayload.currentStatuses)
         whisperNoteStore.replaceItems(in: applyScope, with: latestPulledPayload.whisperNotes)
         debugWhisperSync("apply finished space=\(applyScope.spaceId) storeWhisperNotes=\(whisperNoteStore.items(in: applyScope).count)")
@@ -2317,7 +2355,7 @@ final class AppSyncService: ObservableObject {
         }
         latestErrorText = nil
         latestEventText = eventTextOverride
-            ?? "已将最近云端内容应用到当前空间（本周事项 \(latestPulledPayload.weeklyTodos.count) 条，当前状态 \(latestPulledPayload.currentStatuses.count) 条，悄悄话 \(latestPulledPayload.whisperNotes.count) 条）"
+            ?? "已将最近云端内容应用到当前空间（本周事项 \(latestPulledPayload.weeklyTodos.count) 条，今晚吃什么 \(latestPulledPayload.tonightDinners.count) 条，当前状态 \(latestPulledPayload.currentStatuses.count) 条，悄悄话 \(latestPulledPayload.whisperNotes.count) 条）"
         publishStatus()
         return true
     }
@@ -2329,6 +2367,7 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
         currentStatusStore: CurrentStatusStore,
         whisperNoteStore: WhisperNoteStore
     ) async -> Bool {
@@ -2354,13 +2393,14 @@ final class AppSyncService: ObservableObject {
                 wishStore: wishStore,
                 anniversaryStore: anniversaryStore,
                 weeklyTodoStore: weeklyTodoStore,
+                tonightDinnerStore: tonightDinnerStore,
                 currentStatusStore: currentStatusStore,
                 whisperNoteStore: whisperNoteStore
             )
 
             if didApply {
                 latestErrorText = nil
-                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照（本周事项 \(payload.weeklyTodos.count) 条，当前状态 \(payload.currentStatuses.count) 条，悄悄话 \(payload.whisperNotes.count) 条）"
+                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照（本周事项 \(payload.weeklyTodos.count) 条，今晚吃什么 \(payload.tonightDinners.count) 条，当前状态 \(payload.currentStatuses.count) 条，悄悄话 \(payload.whisperNotes.count) 条）"
             }
 
             isSyncing = false
@@ -2552,7 +2592,7 @@ final class AppSyncService: ObservableObject {
             latestEventText = "进入“我的”页时发现新的共享内容，可手动应用"
         case .accountSyncAppeared:
             latestEventText = "进入“账号与同步”页时发现新的共享内容，可手动应用"
-        case .wishesChanged, .weeklyTodosChanged, .currentStatusesChanged, .whisperNotesChanged:
+        case .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .currentStatusesChanged, .whisperNotesChanged:
             latestEventText = "发现新的共享内容，可手动应用"
         }
         publishStatus()
@@ -2564,6 +2604,7 @@ private extension AppSyncService {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
+        tonightDinners: [TonightDinnerOption],
         currentStatuses: [CurrentStatusItem],
         whisperNotes: [WhisperNoteItem],
         scope: AppContentScope
@@ -2584,6 +2625,10 @@ private extension AppSyncService {
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)|\($0.isCompleted)" }
             .joined(separator: ",")
+        let tonightDinnerSignature = tonightDinners
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.status.rawValue)|\($0.createdAt.timeIntervalSince1970)|\($0.decidedAt?.timeIntervalSince1970 ?? 0)" }
+            .joined(separator: ",")
         let currentStatusSignature = currentStatuses
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)|\($0.displayText)" }
@@ -2602,6 +2647,7 @@ private extension AppSyncService {
             wishSignature,
             anniversarySignature,
             weeklyTodoSignature,
+            tonightDinnerSignature,
             currentStatusSignature,
             whisperSignature
         ].joined(separator: "#")
@@ -2614,6 +2660,7 @@ private struct StoredRemotePayload: Codable {
     let wishes: [StoredRemoteWish]
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
+    let tonightDinners: [StoredRemoteTonightDinner]
     let currentStatuses: [StoredRemoteCurrentStatus]
     let whisperNotes: [StoredRemoteWhisperNote]
     let relationStatusRawValue: String
@@ -2625,6 +2672,7 @@ private struct StoredRemotePayload: Codable {
         case wishes
         case anniversaries
         case weeklyTodos
+        case tonightDinners
         case currentStatuses
         case whisperNotes
         case relationStatusRawValue
@@ -2637,6 +2685,7 @@ private struct StoredRemotePayload: Codable {
         wishes = payload.wishes.map(StoredRemoteWish.init)
         anniversaries = payload.anniversaries.map(StoredRemoteAnniversary.init)
         weeklyTodos = payload.weeklyTodos.map(StoredRemoteWeeklyTodo.init)
+        tonightDinners = payload.tonightDinners.map(StoredRemoteTonightDinner.init)
         currentStatuses = payload.currentStatuses.map(StoredRemoteCurrentStatus.init)
         whisperNotes = payload.whisperNotes.map(StoredRemoteWhisperNote.init)
         relationStatusRawValue = payload.relationStatus.rawValue
@@ -2650,6 +2699,7 @@ private struct StoredRemotePayload: Codable {
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
+        tonightDinners = try container.decodeIfPresent([StoredRemoteTonightDinner].self, forKey: .tonightDinners) ?? []
         currentStatuses = try container.decodeIfPresent([StoredRemoteCurrentStatus].self, forKey: .currentStatuses) ?? []
         whisperNotes = try container.decodeIfPresent([StoredRemoteWhisperNote].self, forKey: .whisperNotes) ?? []
         relationStatusRawValue = try container.decode(String.self, forKey: .relationStatusRawValue)
@@ -2664,6 +2714,7 @@ private struct StoredRemotePayload: Codable {
             wishCount: wishes.count,
             anniversaryCount: anniversaries.count,
             weeklyTodoCount: weeklyTodos.count,
+            tonightDinnerCount: tonightDinners.count,
             currentStatusCount: currentStatuses.count,
             whisperNoteCount: whisperNotes.count,
             updatedAt: updatedAt
@@ -2677,6 +2728,7 @@ private struct StoredRemotePayload: Codable {
             wishes: wishes.map(\.model),
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
+            tonightDinners: tonightDinners.map(\.model),
             currentStatuses: currentStatuses.map(\.model),
             whisperNotes: whisperNotes.map(\.model),
             relationStatus: CoupleRelationStatus(rawValue: relationStatusRawValue) ?? .unpaired,
@@ -2894,6 +2946,44 @@ private struct StoredRemoteWeeklyTodo: Codable {
             createdByUserId: createdByUserId,
             createdAt: createdAt,
             updatedAt: updatedAt,
+            syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
+        )
+    }
+}
+
+private struct StoredRemoteTonightDinner: Codable {
+    let id: UUID
+    let title: String
+    let note: String
+    let statusRawValue: String
+    let createdAt: Date
+    let decidedAt: Date?
+    let createdByUserId: String
+    let spaceId: String
+    let syncStatusRawValue: String
+
+    init(_ item: TonightDinnerOption) {
+        id = item.id
+        title = item.title
+        note = item.note
+        statusRawValue = item.status.rawValue
+        createdAt = item.createdAt
+        decidedAt = item.decidedAt
+        createdByUserId = item.createdByUserId
+        spaceId = item.spaceId
+        syncStatusRawValue = item.syncStatus.rawValue
+    }
+
+    var model: TonightDinnerOption {
+        TonightDinnerOption(
+            id: id,
+            title: title,
+            note: note,
+            status: TonightDinnerStatus(rawValue: statusRawValue) ?? .candidate,
+            createdAt: createdAt,
+            decidedAt: decidedAt,
+            createdByUserId: createdByUserId,
+            spaceId: spaceId,
             syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
         )
     }

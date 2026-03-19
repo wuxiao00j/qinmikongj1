@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct AppRootView: View {
@@ -70,6 +71,17 @@ struct AppRootView: View {
             refreshWidgetSnapshots()
             Task {
                 await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+                syncService.scheduleAutomaticPullIfPossible(
+                    scope: relationshipStore.contentScope,
+                    memoryStore: memoryStore,
+                    wishStore: wishStore,
+                    anniversaryStore: anniversaryStore,
+                    weeklyTodoStore: weeklyTodoStore,
+                    tonightDinnerStore: tonightDinnerStore,
+                    currentStatusStore: currentStatusStore,
+                    whisperNoteStore: whisperNoteStore,
+                    trigger: .appBecameActive
+                )
             }
         }
         .onReceive(relationshipStore.$state) { _ in
@@ -80,6 +92,21 @@ struct AppRootView: View {
         }
         .onReceive(memoryStore.$entries) { _ in
             refreshMemoryWidgetSnapshot()
+        }
+        .onReceive(wishStore.$wishes.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .wishesChanged)
+        }
+        .onReceive(weeklyTodoStore.$items.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .weeklyTodosChanged)
+        }
+        .onReceive(tonightDinnerStore.$items.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .tonightDinnersChanged)
+        }
+        .onReceive(currentStatusStore.$items.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .currentStatusesChanged)
+        }
+        .onReceive(whisperNoteStore.$items.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .whisperNotesChanged)
         }
         .onOpenURL { url in
             navigationState.handleOpenURL(url)
@@ -118,6 +145,21 @@ struct AppRootView: View {
             relationship: relationshipStore.state,
             anniversaries: anniversaryStore.anniversaries,
             entries: memoryStore.entries
+        )
+    }
+
+    private func scheduleAutomaticPush(trigger: AutomaticSyncTrigger) {
+        let scope = relationshipStore.contentScope
+        syncService.scheduleAutomaticPushIfPossible(
+            memories: memoryStore.entries(in: scope),
+            wishes: wishStore.wishes(in: scope),
+            anniversaries: anniversaryStore.anniversaries(in: scope),
+            weeklyTodos: weeklyTodoStore.items(in: scope),
+            tonightDinners: tonightDinnerStore.items(in: scope),
+            currentStatuses: currentStatusStore.items(in: scope),
+            whisperNotes: whisperNoteStore.items(in: scope),
+            scope: scope,
+            trigger: trigger
         )
     }
 }

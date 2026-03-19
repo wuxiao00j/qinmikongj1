@@ -5,6 +5,10 @@ struct MeView: View {
     @EnvironmentObject private var memoryStore: MemoryStore
     @EnvironmentObject private var wishStore: WishStore
     @EnvironmentObject private var anniversaryStore: AnniversaryStore
+    @EnvironmentObject private var weeklyTodoStore: WeeklyTodoStore
+    @EnvironmentObject private var tonightDinnerStore: TonightDinnerStore
+    @EnvironmentObject private var currentStatusStore: CurrentStatusStore
+    @EnvironmentObject private var whisperNoteStore: WhisperNoteStore
     @EnvironmentObject private var relationshipStore: RelationshipStore
     @EnvironmentObject private var accountSessionStore: AccountSessionStore
     @EnvironmentObject private var syncService: AppSyncService
@@ -111,6 +115,17 @@ struct MeView: View {
                 handlePendingDeepLinkIfNeeded()
                 Task {
                     await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+                    syncService.scheduleAutomaticPullIfPossible(
+                        scope: relationshipStore.contentScope,
+                        memoryStore: memoryStore,
+                        wishStore: wishStore,
+                        anniversaryStore: anniversaryStore,
+                        weeklyTodoStore: weeklyTodoStore,
+                        tonightDinnerStore: tonightDinnerStore,
+                        currentStatusStore: currentStatusStore,
+                        whisperNoteStore: whisperNoteStore,
+                        trigger: .meViewAppeared
+                    )
                 }
             }
             .onChange(of: navigationState.selectedTab) { _, _ in
@@ -118,6 +133,17 @@ struct MeView: View {
                 guard navigationState.selectedTab == .me else { return }
                 Task {
                     await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+                    syncService.scheduleAutomaticPullIfPossible(
+                        scope: relationshipStore.contentScope,
+                        memoryStore: memoryStore,
+                        wishStore: wishStore,
+                        anniversaryStore: anniversaryStore,
+                        weeklyTodoStore: weeklyTodoStore,
+                        tonightDinnerStore: tonightDinnerStore,
+                        currentStatusStore: currentStatusStore,
+                        whisperNoteStore: whisperNoteStore,
+                        trigger: .meViewAppeared
+                    )
                 }
             }
             .onChange(of: navigationState.pendingDeepLink) { _, _ in
@@ -323,7 +349,7 @@ private struct AccountSyncStatusView: View {
             whisperNotes: []
         )
     )
-    @State private var exportFilename = "couplespace-backup"
+    @State private var exportFilename = "余白-备份"
     @State private var pendingImportedBackup: LocalBackupPayload?
     @State private var backupFeedback: BackupFeedback?
 
@@ -401,7 +427,7 @@ private struct AccountSyncStatusView: View {
 
                             phaseLine(
                                 title: "当前边界",
-                                subtitle: "当前不包含手机号登录、验证码和自动云端同步；这不会影响你们继续在本机记录、查看和备份现有内容。"
+                                subtitle: "当前不包含手机号登录、验证码和实时自动同步；现在只补了一层低风险的自动推拉触发，手动同步入口仍然保留，方便继续联调和确认内容。"
                             )
                         }
                     }
@@ -457,6 +483,17 @@ private struct AccountSyncStatusView: View {
         }
         .task(id: refreshTaskKey) {
             await syncService.refreshRemoteSummary(for: contentScope)
+            syncService.scheduleAutomaticPullIfPossible(
+                scope: contentScope,
+                memoryStore: memoryStore,
+                wishStore: wishStore,
+                anniversaryStore: anniversaryStore,
+                weeklyTodoStore: weeklyTodoStore,
+                tonightDinnerStore: tonightDinnerStore,
+                currentStatusStore: currentStatusStore,
+                whisperNoteStore: whisperNoteStore,
+                trigger: .accountSyncAppeared
+            )
         }
     }
 
@@ -521,7 +558,9 @@ private struct AccountSyncStatusView: View {
             wishes: wishStore.wishes(in: contentScope),
             anniversaries: anniversaryStore.anniversaries(in: contentScope),
             weeklyTodos: weeklyTodoItems,
+            tonightDinners: tonightDinnerItems,
             currentStatuses: currentStatuses,
+            whisperNotes: whisperNotes,
             scope: contentScope
         )
 
@@ -573,7 +612,7 @@ private struct AccountSyncStatusView: View {
                     SpaceInsight(
                         title: "内容快照",
                         value: "\(snapshot.totalCount) 条",
-                        note: "这里汇总了当前空间里的 \(snapshot.memoryCount) 段生活记录、\(snapshot.wishCount) 个愿望、\(snapshot.anniversaryCount) 个纪念日、\(snapshot.weeklyTodoCount) 条本周事项和 \(snapshot.currentStatusCount) 条当前状态。"
+                        note: "这里汇总了当前空间里的 \(snapshot.memoryCount) 段生活记录、\(snapshot.wishCount) 个愿望、\(snapshot.anniversaryCount) 个纪念日、\(snapshot.weeklyTodoCount) 条本周事项、\(snapshot.tonightDinnerCount) 个今晚吃什么候选、\(snapshot.currentStatusCount) 条当前状态和 \(snapshot.whisperNoteCount) 条悄悄话。"
                     )
                 )
 
@@ -744,6 +783,19 @@ private struct AccountSyncStatusView: View {
                             .lineSpacing(3)
                     }
                     .foregroundStyle(syncService.status.latestErrorText == nil ? AppTheme.Colors.deepAccent : AppTheme.Colors.subtitle)
+                }
+
+                if syncService.status.hasPendingPulledContent,
+                   let pendingText = syncService.status.pendingPulledContentText {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.caption.weight(.semibold))
+
+                        Text(pendingText)
+                            .font(.footnote.weight(.medium))
+                            .lineSpacing(3)
+                    }
+                    .foregroundStyle(AppTheme.Colors.subtitle)
                 }
 
                 moduleFootnote(
@@ -965,7 +1017,9 @@ private struct AccountSyncStatusView: View {
                             wishes: wishStore.wishes(in: contentScope),
                             anniversaries: anniversaryStore.anniversaries(in: contentScope),
                             weeklyTodoStore: weeklyTodoStore,
+                            tonightDinnerStore: tonightDinnerStore,
                             currentStatusStore: currentStatusStore,
+                            whisperNoteStore: whisperNoteStore,
                             scope: contentScope
                         )
                     }
@@ -990,7 +1044,9 @@ private struct AccountSyncStatusView: View {
                             wishStore: wishStore,
                             anniversaryStore: anniversaryStore,
                             weeklyTodoStore: weeklyTodoStore,
-                            currentStatusStore: currentStatusStore
+                            tonightDinnerStore: tonightDinnerStore,
+                            currentStatusStore: currentStatusStore,
+                            whisperNoteStore: whisperNoteStore
                         )
                     }
                 } label: {
@@ -1010,7 +1066,9 @@ private struct AccountSyncStatusView: View {
                         wishes: wishStore.wishes(in: contentScope),
                         anniversaries: anniversaryStore.anniversaries(in: contentScope),
                         weeklyTodos: weeklyTodoItems,
-                        currentStatuses: currentStatuses
+                        tonightDinners: tonightDinnerItems,
+                        currentStatuses: currentStatuses,
+                        whisperNotes: whisperNotes
                     )
 
                     _ = syncService.rehearseRemoteSnapshotPayload(
@@ -1020,7 +1078,9 @@ private struct AccountSyncStatusView: View {
                         wishStore: wishStore,
                         anniversaryStore: anniversaryStore,
                         weeklyTodoStore: weeklyTodoStore,
-                        currentStatusStore: currentStatusStore
+                        tonightDinnerStore: tonightDinnerStore,
+                        currentStatusStore: currentStatusStore,
+                        whisperNoteStore: whisperNoteStore
                     )
                 } label: {
                     PageActionPill(text: "本地演练同步返回", systemImage: "square.and.arrow.down")
@@ -1233,7 +1293,9 @@ private enum AccountSyncRehearsalFixtures {
     private static let remoteMemoryID = UUID(uuidString: "1D27798A-0C77-44B5-A862-B2FC387A7E16")!
     private static let remoteWishID = UUID(uuidString: "39FA9A60-4E54-455F-A900-C1FC31B48E0F")!
     private static let remoteAnniversaryID = UUID(uuidString: "98E1E0B9-6FAF-4A0E-8B4F-C8A66879AA50")!
+    private static let remoteTonightDinnerID = UUID(uuidString: "A41E3B50-53A0-4A63-9EAB-62A6E2A8645A")!
     private static let remoteCurrentStatusID = UUID(uuidString: "F1A77AA1-77C0-45AC-A562-B0E670B5E8E9")!
+    private static let remoteWhisperNoteID = UUID(uuidString: "29B8C146-4A59-4D9D-9DF2-7B532001B894")!
 
     static func authenticatedPayload(currentNickname: String) -> AuthenticatedAccountPayload {
         let trimmedName = currentNickname.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1245,7 +1307,7 @@ private enum AccountSyncRehearsalFixtures {
         return AuthenticatedAccountPayload(
             accountId: "acct-auth-rehearsal-\(normalizedID)",
             displayName: displayName,
-            providerName: "Couple Space Account",
+            providerName: "余白",
             accountHint: "本地 mock 真实登录返回",
             accessToken: nil
         )
@@ -1258,7 +1320,9 @@ private enum AccountSyncRehearsalFixtures {
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
-        currentStatuses: [CurrentStatusItem]
+        tonightDinners: [TonightDinnerOption],
+        currentStatuses: [CurrentStatusItem],
+        whisperNotes: [WhisperNoteItem]
     ) -> RemoteSyncSnapshotPayload {
         let now = Date()
         let rehearsalMemory = MemoryTimelineEntry(
@@ -1318,6 +1382,17 @@ private enum AccountSyncRehearsalFixtures {
             updatedAt: now,
             syncStatus: .synced
         )
+        let rehearsalTonightDinner = TonightDinnerOption(
+            id: remoteTonightDinnerID,
+            title: "云端返回演练：番茄牛腩面",
+            note: "这条只用于验证 TonightDinner 能否顺着 snapshot pull/apply 写回本地 store。",
+            status: .candidate,
+            createdAt: now,
+            decidedAt: nil,
+            createdByUserId: scope.partnerUserId ?? scope.currentUserId,
+            spaceId: scope.spaceId,
+            syncStatus: .synced
+        )
         let rehearsalCurrentStatus = CurrentStatusItem(
             id: remoteCurrentStatusID,
             userId: scope.partnerUserId ?? scope.currentUserId,
@@ -1326,6 +1401,14 @@ private enum AccountSyncRehearsalFixtures {
             effectiveScope: .today,
             spaceId: scope.spaceId,
             updatedAt: now
+        )
+        let rehearsalWhisperNote = WhisperNoteItem(
+            id: remoteWhisperNoteID,
+            content: "云端返回演练：今晚回家后记得抱一下我。",
+            createdAt: now,
+            createdByUserId: scope.partnerUserId ?? scope.currentUserId,
+            spaceId: scope.spaceId,
+            syncStatus: .synced
         )
 
         return RemoteSyncSnapshotPayload(
@@ -1338,7 +1421,9 @@ private enum AccountSyncRehearsalFixtures {
             wishes: merging(rehearsalWish, into: markAsSynced(wishes, updatedAt: now)),
             anniversaries: merging(rehearsalAnniversary, into: markAsSynced(anniversaries, updatedAt: now)),
             weeklyTodos: merging(rehearsalWeeklyTodo, into: markAsSynced(weeklyTodos, updatedAt: now)),
+            tonightDinners: merging(rehearsalTonightDinner, into: markAsSynced(tonightDinners)),
             currentStatuses: merging(rehearsalCurrentStatus, into: markAsSynced(currentStatuses, updatedAt: now)),
+            whisperNotes: merging(rehearsalWhisperNote, into: markAsSynced(whisperNotes)),
             relationStatus: relationship.relationStatus,
             updatedAt: now
         )
@@ -1360,7 +1445,15 @@ private enum AccountSyncRehearsalFixtures {
         [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
     }
 
+    private static func merging(_ rehearsalItem: TonightDinnerOption, into items: [TonightDinnerOption]) -> [TonightDinnerOption] {
+        [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
+    }
+
     private static func merging(_ rehearsalItem: CurrentStatusItem, into items: [CurrentStatusItem]) -> [CurrentStatusItem] {
+        [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
+    }
+
+    private static func merging(_ rehearsalItem: WhisperNoteItem, into items: [WhisperNoteItem]) -> [WhisperNoteItem] {
         [rehearsalItem] + items.filter { $0.id != rehearsalItem.id }
     }
 
@@ -1442,6 +1535,22 @@ private enum AccountSyncRehearsalFixtures {
         }
     }
 
+    private static func markAsSynced(_ items: [TonightDinnerOption]) -> [TonightDinnerOption] {
+        items.map { item in
+            TonightDinnerOption(
+                id: item.id,
+                title: item.title,
+                note: item.note,
+                status: item.status,
+                createdAt: item.createdAt,
+                decidedAt: item.decidedAt,
+                createdByUserId: item.createdByUserId,
+                spaceId: item.spaceId,
+                syncStatus: .synced
+            )
+        }
+    }
+
     private static func markAsSynced(_ items: [CurrentStatusItem], updatedAt: Date) -> [CurrentStatusItem] {
         items.map { item in
             CurrentStatusItem(
@@ -1452,6 +1561,19 @@ private enum AccountSyncRehearsalFixtures {
                 effectiveScope: item.effectiveScope,
                 spaceId: item.spaceId,
                 updatedAt: updatedAt
+            )
+        }
+    }
+
+    private static func markAsSynced(_ items: [WhisperNoteItem]) -> [WhisperNoteItem] {
+        items.map { item in
+            WhisperNoteItem(
+                id: item.id,
+                content: item.content,
+                createdAt: item.createdAt,
+                createdByUserId: item.createdByUserId,
+                spaceId: item.spaceId,
+                syncStatus: .synced
             )
         }
     }
