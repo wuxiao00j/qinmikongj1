@@ -5,8 +5,13 @@ import Foundation
 private func debugWhisperSync(_ message: @autoclosure () -> String) {
     print("[WhisperSync] \(message())")
 }
+
+private func debugMemoryAssetSync(_ message: @autoclosure () -> String) {
+    print("[MemoryAssetSync] \(message())")
+}
 #else
 private func debugWhisperSync(_ message: @autoclosure () -> String) {}
+private func debugMemoryAssetSync(_ message: @autoclosure () -> String) {}
 #endif
 
 // MARK: - Account Session
@@ -1153,6 +1158,16 @@ private struct RealSyncRemoteHTTPClient {
 
         return (data, httpResponse)
     }
+
+    func upload(_ request: URLRequest, from body: Data) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await session.upload(for: request, from: body)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        return (data, httpResponse)
+    }
 }
 
 private struct RealSyncRemotePullEnvelope: Decodable {
@@ -1409,22 +1424,40 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
     ) async throws -> UploadedMemoryAssetReference {
         try validateConfiguration(for: context)
         let authorization = try await resolveAuthorization(for: context)
-        let request = try requestBuilder.makeRequest(
+        debugMemoryAssetSync(
+            "prepare upload request memory=\(memoryID.uuidString.lowercased()) space=\(context.spaceId) bytes=\(data.count) mime=\(mimeType) account=\(context.accountId)"
+        )
+        var request = try requestBuilder.makeRequest(
             method: .post,
             pathComponents: ["spaces", context.spaceId, "memory-assets"],
             queryItems: [URLQueryItem(name: "memoryId", value: memoryID.uuidString.lowercased())],
             context: context,
             authorization: authorization,
-            body: data,
-            contentType: mimeType
+            body: nil,
+            contentType: nil
         )
+        request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+        request.setValue(String(data.count), forHTTPHeaderField: "Content-Length")
 
         let responseData: Data
         let response: HTTPURLResponse
 
         do {
-            (responseData, response) = try await httpClient.execute(request)
+            (responseData, response) = try await httpClient.upload(request, from: data)
+        } catch is CancellationError {
+            debugMemoryAssetSync("upload request cancelled memory=\(memoryID.uuidString.lowercased())")
+            throw RealSyncRemoteProviderError.requestFailed(
+                operation: "uploadMemoryAsset",
+                detail: "上传任务在发送过程中被取消了"
+            )
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            debugMemoryAssetSync("upload request cancelled memory=\(memoryID.uuidString.lowercased()) urlError=cancelled")
+            throw RealSyncRemoteProviderError.requestFailed(
+                operation: "uploadMemoryAsset",
+                detail: "上传任务在发送过程中被取消了"
+            )
         } catch {
+            debugMemoryAssetSync("upload request failed memory=\(memoryID.uuidString.lowercased()) error=\(error.localizedDescription)")
             throw mapRequestFailure(error, operation: "uploadMemoryAsset")
         }
 
@@ -1441,8 +1474,10 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
 
         do {
             let payload = try decoder.decode(RealSyncRemoteMemoryAssetUploadResponse.self, from: responseData)
+            debugMemoryAssetSync("upload response success memory=\(payload.memoryId) asset=\(payload.assetId) space=\(payload.spaceId)")
             return payload.uploadedReference()
         } catch {
+            debugMemoryAssetSync("upload response decode failed memory=\(memoryID.uuidString.lowercased()) error=\(error.localizedDescription)")
             throw RealSyncRemoteProviderError.responseDecodingFailed(
                 operation: "uploadMemoryAsset",
                 detail: error.localizedDescription
@@ -1793,6 +1828,7 @@ final class AppSyncService: ObservableObject {
     private var latestErrorText: String?
     private var automaticPushTask: Task<Void, Never>?
     private var automaticPullTask: Task<Void, Never>?
+    private var memoryAssetUploadTasks: [UUID: Task<Void, Never>] = [:]
     private var latestAutomaticPushSignature: String?
     private var lastAutomaticPullAt: Date?
     private var automaticPushSuppressedUntil: Date?
@@ -1918,25 +1954,38 @@ final class AppSyncService: ObservableObject {
         scope: AppContentScope,
         memoryStore: MemoryStore
     ) async -> UploadedMemoryAssetReference? {
-        guard canAttemptAutomaticBackendSync(for: scope) else { return nil }
+        debugMemoryAssetSync(
+            "trigger upload check entry=\(entry.id.uuidString.lowercased()) photo=\(entry.photoFilename ?? "nil") remoteAsset=\(entry.remoteAssetID ?? "nil") scope=\(scope.spaceId)"
+        )
+        guard canAttemptAutomaticBackendSync(for: scope) else {
+            debugMemoryAssetSync("skip upload entry=\(entry.id.uuidString.lowercased()) reason=backend sync unavailable")
+            return nil
+        }
         guard let photoFilename = entry.photoFilename,
               photoFilename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            debugMemoryAssetSync("skip upload entry=\(entry.id.uuidString.lowercased()) reason=missing photoFilename")
             return nil
         }
 
         guard entry.remoteAssetID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            debugMemoryAssetSync("skip upload entry=\(entry.id.uuidString.lowercased()) reason=remoteAsset already exists")
             return nil
         }
 
         guard let imageData = MemoryPhotoStorage.imageData(for: photoFilename) else {
+            debugMemoryAssetSync("skip upload entry=\(entry.id.uuidString.lowercased()) reason=failed to read image data")
             latestErrorText = "这条记忆的本地图片暂时读取失败，无法上传到测试环境。"
             latestEventText = "记忆图片上传没有成功"
             publishStatus()
             return nil
         }
+        debugMemoryAssetSync("image data ready entry=\(entry.id.uuidString.lowercased()) bytes=\(imageData.count)")
 
         do {
             let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
+            debugMemoryAssetSync(
+                "call uploadMemoryAsset entry=\(entry.id.uuidString.lowercased()) account=\(target.context.accountId) currentUser=\(target.context.currentUserId) space=\(target.context.spaceId)"
+            )
             let uploadedAsset = try await realSyncProvider.uploadMemoryAsset(
                 data: imageData,
                 mimeType: "image/jpeg",
@@ -1944,15 +1993,52 @@ final class AppSyncService: ObservableObject {
                 context: target.context
             )
             memoryStore.setRemoteAssetID(uploadedAsset.assetId, for: entry.id, in: target.scope)
+            debugMemoryAssetSync("upload finished entry=\(entry.id.uuidString.lowercased()) asset=\(uploadedAsset.assetId)")
             latestErrorText = nil
             latestEventText = "已为这条记忆上传图片资源（assetId: \(uploadedAsset.assetId)）"
             publishStatus()
             return uploadedAsset
         } catch {
+            debugMemoryAssetSync("upload failed entry=\(entry.id.uuidString.lowercased()) error=\(error.localizedDescription)")
             latestErrorText = error.localizedDescription
             latestEventText = "记忆图片上传没有成功"
             publishStatus()
             return nil
+        }
+    }
+
+    func scheduleMemoryPhotoUploadIfPossible(
+        for entry: MemoryTimelineEntry,
+        scope: AppContentScope,
+        memoryStore: MemoryStore
+    ) {
+        let entryID = entry.id
+        if let existingTask = memoryAssetUploadTasks[entryID] {
+            existingTask.cancel()
+            debugMemoryAssetSync("cancel existing scheduled upload entry=\(entryID.uuidString.lowercased())")
+        }
+
+        debugMemoryAssetSync(
+            "schedule upload task entry=\(entryID.uuidString.lowercased()) photo=\(entry.photoFilename ?? "nil") scope=\(scope.spaceId)"
+        )
+
+        memoryAssetUploadTasks[entryID] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.memoryAssetUploadTasks[entryID] = nil
+                debugMemoryAssetSync("upload task cleared entry=\(entryID.uuidString.lowercased())")
+            }
+
+            guard Task.isCancelled == false else {
+                debugMemoryAssetSync("scheduled upload task cancelled before start entry=\(entryID.uuidString.lowercased())")
+                return
+            }
+
+            _ = await self.uploadMemoryPhotoIfPossible(
+                for: entry,
+                scope: scope,
+                memoryStore: memoryStore
+            )
         }
     }
 

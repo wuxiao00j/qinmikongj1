@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+from starlette.requests import ClientDisconnect
 
 from backend.auth import verify_password
 from backend.config import settings
@@ -1093,6 +1094,13 @@ async def upload_memory_asset(
         session_account_id_header=x_couple_space_session_account_id,
     )
     ensure_space_access(db, space_id, account)
+    logger.info(
+        "memory asset upload hit space=%s memory=%s content_type=%s account=%s",
+        space_id,
+        memoryId,
+        request.headers.get("Content-Type"),
+        account.account_id,
+    )
 
     normalized_memory_id = memoryId.strip()
     if not normalized_memory_id:
@@ -1111,7 +1119,32 @@ async def upload_memory_asset(
         )
 
     extension = resolve_memory_asset_extension(mime_type)
-    body = await request.body()
+    logger.info(
+        "memory asset upload reading body space=%s memory=%s content_length=%s",
+        space_id,
+        normalized_memory_id,
+        request.headers.get("Content-Length"),
+    )
+    try:
+        body = await request.body()
+        logger.info(
+            "memory asset upload body ready space=%s memory=%s bytes=%s",
+            space_id,
+            normalized_memory_id,
+            len(body),
+        )
+    except ClientDisconnect as error:
+        logger.warning(
+            "memory asset upload disconnected space=%s memory=%s error=%s",
+            space_id,
+            normalized_memory_id,
+            error.__class__.__name__,
+        )
+        raise APIError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="client_disconnected",
+            message="图片上传在传输过程中中断，请稍后重试。",
+        ) from error
     if not body:
         raise APIError(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

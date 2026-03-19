@@ -111,15 +111,12 @@ struct MemoryView: View {
                             memoryStore.add(newEntry, in: contentScope)
                             scrollTargetID = newEntry.id
                         }
-                        if let savedEntry = memoryStore.entries(in: contentScope).first(where: { $0.id == newEntry.id }),
-                           savedEntry.photoFilename != nil {
-                            Task {
-                                await syncService.uploadMemoryPhotoIfPossible(
-                                    for: savedEntry,
-                                    scope: contentScope,
-                                    memoryStore: memoryStore
-                                )
-                            }
+                        if newEntry.photoFilename != nil {
+                            syncService.scheduleMemoryPhotoUploadIfPossible(
+                                for: newEntry,
+                                scope: contentScope,
+                                memoryStore: memoryStore
+                            )
                         }
                     }
                 }
