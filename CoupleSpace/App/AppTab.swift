@@ -6,9 +6,50 @@ import UIKit
 private func debugMemoryStore(_ message: @autoclosure () -> String) {
     print("[MemoryStore] \(message())")
 }
+
+private func debugWishStore(_ message: @autoclosure () -> String) {
+    print("[WishStore] \(message())")
+}
 #else
 private func debugMemoryStore(_ message: @autoclosure () -> String) {}
+private func debugWishStore(_ message: @autoclosure () -> String) {}
 #endif
+
+private func makeWishStoreJSONDecoder() -> JSONDecoder {
+    let decoder = JSONDecoder()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    decoder.dateDecodingStrategy = .custom { decoder in
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if let date = formatter.date(from: value) {
+            return date
+        }
+
+        let fallbackFormatter = ISO8601DateFormatter()
+        fallbackFormatter.formatOptions = [.withInternetDateTime]
+        if let date = fallbackFormatter.date(from: value) {
+            return date
+        }
+
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Invalid ISO8601 date: \(value)"
+        )
+    }
+    return decoder
+}
+
+private func makeWishStoreJSONEncoder() -> JSONEncoder {
+    let encoder = JSONEncoder()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    encoder.dateEncodingStrategy = .custom { date, encoder in
+        var container = encoder.singleValueContainer()
+        try container.encode(formatter.string(from: date))
+    }
+    return encoder
+}
 
 enum AppTab: Hashable {
     case home
@@ -412,7 +453,11 @@ final class WishStore: ObservableObject {
     }
 
     func add(_ wish: PlaceWish, in scope: AppContentScope) {
-        wishes.append(wish.preparedForLocalInsert(in: scope))
+        let preparedWish = wish.preparedForLocalInsert(in: scope)
+        debugWishStore(
+            "local add id=\(preparedWish.id.uuidString.lowercased()) user=\(preparedWish.createdByUserId) space=\(preparedWish.spaceId) updatedAt=\(preparedWish.updatedAt.timeIntervalSince1970)"
+        )
+        wishes.append(preparedWish)
         save()
     }
 
@@ -421,7 +466,7 @@ final class WishStore: ObservableObject {
             return
         }
 
-        wishes[index] = wishes[index].preparedForContentUpdate(
+        let updatedWish = wishes[index].preparedForContentUpdate(
             title: wish.title,
             detail: wish.detail,
             note: wish.note,
@@ -431,6 +476,10 @@ final class WishStore: ObservableObject {
             symbol: wish.symbol,
             scope: scope
         )
+        debugWishStore(
+            "local update id=\(updatedWish.id.uuidString.lowercased()) user=\(updatedWish.createdByUserId) space=\(updatedWish.spaceId) updatedAt=\(updatedWish.updatedAt.timeIntervalSince1970) category=\(updatedWish.category.rawValue) status=\(updatedWish.status.rawValue)"
+        )
+        wishes[index] = updatedWish
         save()
     }
 
@@ -438,6 +487,9 @@ final class WishStore: ObservableObject {
         guard wishes.contains(where: { $0.id == wishID && $0.matches(scope: scope) }) else {
             return
         }
+        debugWishStore(
+            "local delete id=\(wishID.uuidString.lowercased()) space=\(scope.spaceId) user=\(scope.currentUserId)"
+        )
         wishes.removeAll { $0.id == wishID && $0.matches(scope: scope) }
         upsertDeletionTombstone(
             WishDeletionTombstone(
@@ -460,10 +512,15 @@ final class WishStore: ObservableObject {
     func mergeRemoteWishes(in scope: AppContentScope, with importedWishes: [PlaceWish]) {
         let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
         let localScopedWishes = wishes.filter { $0.matches(scope: scope) }
+        let localBeforeByID = Dictionary(uniqueKeysWithValues: localScopedWishes.map { ($0.id, $0) })
         var mergedByID = Dictionary(
             uniqueKeysWithValues: localScopedWishes
                 .filter { deletedIDs.contains($0.id) == false }
                 .map { ($0.id, $0) }
+        )
+
+        debugWishStore(
+            "merge remote begin space=\(scope.spaceId) localBefore=\(wishDebugSummary(localScopedWishes)) imported=\(wishDebugSummary(importedWishes)) deleted=\(deletedIDs.map { $0.uuidString.lowercased() }.sorted().joined(separator: ","))"
         )
 
         for importedWish in importedWishes {
@@ -472,13 +529,28 @@ final class WishStore: ObservableObject {
             let preparedWish = importedWish.preparedForScopeReplacement(in: scope)
             if let existingWish = mergedByID[preparedWish.id],
                existingWish.updatedAt > preparedWish.updatedAt {
+                debugWishStore(
+                    "merge remote keep newer local id=\(existingWish.id.uuidString.lowercased()) localUpdatedAt=\(existingWish.updatedAt.timeIntervalSince1970) remoteUpdatedAt=\(preparedWish.updatedAt.timeIntervalSince1970)"
+                )
                 continue
+            }
+            if let existingWish = localBeforeByID[preparedWish.id] {
+                debugWishStore(
+                    "merge remote upsert id=\(preparedWish.id.uuidString.lowercased()) localUpdatedAt=\(existingWish.updatedAt.timeIntervalSince1970) remoteUpdatedAt=\(preparedWish.updatedAt.timeIntervalSince1970) category=\(preparedWish.category.rawValue)"
+                )
+            } else {
+                debugWishStore(
+                    "merge remote insert id=\(preparedWish.id.uuidString.lowercased()) remoteUpdatedAt=\(preparedWish.updatedAt.timeIntervalSince1970) category=\(preparedWish.category.rawValue)"
+                )
             }
             mergedByID[preparedWish.id] = preparedWish
         }
 
         wishes.removeAll { $0.matches(scope: scope) }
         wishes.append(contentsOf: mergedByID.values)
+        debugWishStore(
+            "merge remote end space=\(scope.spaceId) localAfter=\(wishDebugSummary(wishes.filter { $0.matches(scope: scope) }))"
+        )
         save()
     }
 
@@ -504,6 +576,9 @@ final class WishStore: ObservableObject {
         deletionTombstones = keptTombstones + mergedTombstones
 
         let deletedIDs = Set(mergedTombstones.map(\.id))
+        debugWishStore(
+            "merge tombstones space=\(scope.spaceId) merged=\(wishTombstoneDebugSummary(mergedTombstones))"
+        )
         wishes.removeAll { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
         save()
         return mergedTombstones
@@ -516,8 +591,7 @@ final class WishStore: ObservableObject {
         }
 
         do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
+            let decoder = makeWishStoreJSONDecoder()
             let decoded = try decoder.decode([StoredWish].self, from: data)
             wishes = decoded.map(\.model)
         } catch {
@@ -528,8 +602,7 @@ final class WishStore: ObservableObject {
 
     private func save() {
         do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
+            let encoder = makeWishStoreJSONEncoder()
             let data = try encoder.encode(wishes.map { StoredWish(wish: $0) })
             defaults.set(data, forKey: storageKey)
             let tombstoneData = try encoder.encode(
@@ -548,8 +621,7 @@ final class WishStore: ObservableObject {
         }
 
         do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
+            let decoder = makeWishStoreJSONDecoder()
             let decoded = try decoder.decode([StoredWishDeletionTombstone].self, from: data)
             deletionTombstones = decoded
                 .map(\.model)
@@ -570,6 +642,34 @@ final class WishStore: ObservableObject {
             deletionTombstones.append(preparedTombstone)
         }
         deletionTombstones.sort { $0.deletedAt > $1.deletedAt }
+    }
+
+    private func wishDebugSummary(_ wishes: [PlaceWish]) -> String {
+        if wishes.isEmpty {
+            return "[]"
+        }
+
+        let summary = wishes
+            .sorted { $0.updatedAt < $1.updatedAt }
+            .map {
+                "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)|category=\($0.category.rawValue)|status=\($0.status.rawValue)"
+            }
+            .joined(separator: ",")
+        return "[\(summary)]"
+    }
+
+    private func wishTombstoneDebugSummary(_ tombstones: [WishDeletionTombstone]) -> String {
+        if tombstones.isEmpty {
+            return "[]"
+        }
+
+        let summary = tombstones
+            .sorted { $0.deletedAt < $1.deletedAt }
+            .map {
+                "\($0.id.uuidString.lowercased())|deletedBy=\($0.deletedByUserId)|deletedAt=\($0.deletedAt.timeIntervalSince1970)"
+            }
+            .joined(separator: ",")
+        return "[\(summary)]"
     }
 }
 

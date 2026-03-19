@@ -767,6 +767,17 @@ def filter_wishes_by_tombstones(
     return [wish for wish in wishes if wish.id not in deleted_ids]
 
 
+def wish_debug_summary(wishes: list[StoredRemoteWishModel]) -> str:
+    if not wishes:
+        return "[]"
+
+    summary = ",".join(
+        f"{wish.id}|user={wish.createdByUserId}|updatedAt={wish.updatedAt.timestamp()}|category={wish.categoryRawValue}|status={wish.statusRawValue}"
+        for wish in sorted(wishes, key=lambda item: item.updatedAt)
+    )
+    return f"[{summary}]"
+
+
 def merge_wish_snapshot_state(
     existing_snapshot: SnapshotRecordModel | None,
     incoming_snapshot: SnapshotRecordModel,
@@ -806,6 +817,14 @@ def merge_wish_snapshot_state(
         ),
         key=lambda item: item.updatedAt,
         reverse=True,
+    )
+
+    logger.info(
+        "snapshot wish merge existing=%s incoming=%s merged=%s tombstones=%s",
+        wish_debug_summary(existing_snapshot.wishes),
+        wish_debug_summary(incoming_snapshot.wishes),
+        wish_debug_summary(merged_wishes),
+        len(merged_tombstones),
     )
 
     return incoming_snapshot.model_copy(

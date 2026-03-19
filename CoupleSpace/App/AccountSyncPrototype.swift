@@ -14,6 +14,10 @@ private func debugMemorySync(_ message: @autoclosure () -> String) {
     print("[MemorySync] \(message())")
 }
 
+private func debugWishSync(_ message: @autoclosure () -> String) {
+    print("[WishSync] \(message())")
+}
+
 private func debugMemoryAssetSync(_ message: @autoclosure () -> String) {
     print("[MemoryAssetSync] \(message())")
 }
@@ -21,8 +25,77 @@ private func debugMemoryAssetSync(_ message: @autoclosure () -> String) {
 private func debugWhisperSync(_ message: @autoclosure () -> String) {}
 private func debugAutomaticPush(_ message: @autoclosure () -> String) {}
 private func debugMemorySync(_ message: @autoclosure () -> String) {}
+private func debugWishSync(_ message: @autoclosure () -> String) {}
 private func debugMemoryAssetSync(_ message: @autoclosure () -> String) {}
 #endif
+
+private let syncISO8601DateFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
+private let fallbackSyncISO8601DateFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+
+private func makeSyncJSONDecoder() -> JSONDecoder {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .custom { decoder in
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if let date = syncISO8601DateFormatter.date(from: value) {
+            return date
+        }
+        if let date = fallbackSyncISO8601DateFormatter.date(from: value) {
+            return date
+        }
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Invalid ISO8601 date: \(value)"
+        )
+    }
+    return decoder
+}
+
+private func makeSyncJSONEncoder() -> JSONEncoder {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .custom { date, encoder in
+        var container = encoder.singleValueContainer()
+        try container.encode(syncISO8601DateFormatter.string(from: date))
+    }
+    return encoder
+}
+
+private func wishDebugSummary(_ wishes: [PlaceWish]) -> String {
+    if wishes.isEmpty {
+        return "[]"
+    }
+
+    let ids = wishes
+        .sorted { $0.updatedAt < $1.updatedAt }
+        .map {
+            "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)|category=\($0.category.rawValue)|status=\($0.status.rawValue)"
+        }
+        .joined(separator: ",")
+    return "[\(ids)]"
+}
+
+private func wishTombstoneDebugSummary(_ tombstones: [WishDeletionTombstone]) -> String {
+    if tombstones.isEmpty {
+        return "[]"
+    }
+
+    let ids = tombstones
+        .sorted { $0.deletedAt < $1.deletedAt }
+        .map {
+            "\($0.id.uuidString.lowercased())|deletedBy=\($0.deletedByUserId)|deletedAt=\($0.deletedAt.timeIntervalSince1970)"
+        }
+        .joined(separator: ",")
+    return "[\(ids)]"
+}
 
 // MARK: - Account Session
 
@@ -1518,8 +1591,7 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
             )
         }
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = makeSyncJSONDecoder()
 
         do {
             let payload = try decoder.decode(RealSyncRemoteMemoryAssetUploadResponse.self, from: responseData)
@@ -1545,11 +1617,13 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
     }
 
     private func makePushRequestBody(_ payload: SyncContentPayload) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        let encoder = makeSyncJSONEncoder()
 
         do {
             debugWhisperSync("encode push payload space=\(payload.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            debugWishSync(
+                "encode push payload space=\(payload.scope.spaceId) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones))"
+            )
             return try encoder.encode(StoredRemotePayload(payload: payload))
         } catch {
             throw RealSyncRemoteProviderError.requestEncodingFailed(operation: "pushContent")
@@ -1614,8 +1688,7 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
         response: HTTPURLResponse,
         context: AppSyncRequestContext
     ) throws -> RemoteSyncSnapshotPayload {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = makeSyncJSONDecoder()
 
         if let envelope = try? decoder.decode(RealSyncRemotePullEnvelope.self, from: data),
            let snapshot = envelope.resolvedSnapshot {
@@ -1624,6 +1697,9 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
                 fallbackSnapshotId: responseSnapshotIdentifier(from: response)
             )
             debugWhisperSync("decode pull payload space=\(payload.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            debugWishSync(
+                "decode pull payload space=\(payload.spaceId) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones)) updatedAt=\(payload.updatedAt.timeIntervalSince1970)"
+            )
             return payload
         }
 
@@ -1634,6 +1710,9 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
                 fallbackSnapshotId: responseSnapshotIdentifier(from: response)
             )
             debugWhisperSync("decode pull payload space=\(payload.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            debugWishSync(
+                "decode pull payload space=\(payload.spaceId) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones)) updatedAt=\(payload.updatedAt.timeIntervalSince1970)"
+            )
             return payload
         } catch let providerError as RealSyncRemoteProviderError {
             throw providerError
@@ -1724,8 +1803,7 @@ final class FakeSyncRemoteProvider: AppSyncRemoteProviding {
         }
 
         do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
+            let decoder = makeSyncJSONDecoder()
             return try decoder.decode([String: StoredRemotePayload].self, from: data)
         } catch {
             defaults.removeObject(forKey: storageKey)
@@ -1734,8 +1812,7 @@ final class FakeSyncRemoteProvider: AppSyncRemoteProviding {
     }
 
     private func saveRecords(_ records: [String: StoredRemotePayload]) throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        let encoder = makeSyncJSONEncoder()
         let data = try encoder.encode(records)
         defaults.set(data, forKey: storageKey)
     }
@@ -1753,8 +1830,7 @@ final class AccountSessionStore: ObservableObject {
 
         if let data = defaults.data(forKey: storageKey) {
             do {
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .iso8601
+                let decoder = makeSyncJSONDecoder()
                 state = try decoder.decode(AccountSessionState.self, from: data)
                 return
             } catch {
@@ -1825,8 +1901,7 @@ final class AccountSessionStore: ObservableObject {
 
     private func save() {
         do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
+            let encoder = makeSyncJSONEncoder()
             let data = try encoder.encode(state)
             defaults.set(data, forKey: storageKey)
         } catch {
@@ -2158,6 +2233,9 @@ final class AppSyncService: ObservableObject {
         debugMemorySync(
             "schedule push trigger=\(trigger.rawValue) scope=\(scope.spaceId) memories=\(memoryDebugSummary(memories)) tombstones=\(memoryTombstoneDebugSummary(memoryTombstones))"
         )
+        debugWishSync(
+            "schedule push trigger=\(trigger.rawValue) scope=\(scope.spaceId) wishes=\(wishDebugSummary(wishes)) tombstones=\(wishTombstoneDebugSummary(wishTombstones))"
+        )
         if automaticPushTask != nil {
             debugAutomaticPush("schedule automatic push replacing existing task trigger=\(trigger.rawValue)")
         }
@@ -2199,9 +2277,23 @@ final class AppSyncService: ObservableObject {
                 }
             }
             debugAutomaticPush("suppression window ended trigger=\(trigger.rawValue)")
-            guard self.isSyncing == false else {
-                debugAutomaticPush("delayed push skipped because sync still running trigger=\(trigger.rawValue)")
-                return
+            while self.isSyncing {
+                debugAutomaticPush("delayed push waiting because sync still running trigger=\(trigger.rawValue)")
+                debugWishSync("delayed push waiting trigger=\(trigger.rawValue) scope=\(scope.spaceId) isSyncing=true")
+                do {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                } catch {
+                    debugAutomaticPush("automatic push task cancelled while waiting active sync trigger=\(trigger.rawValue)")
+                    return
+                }
+                guard !Task.isCancelled else {
+                    debugAutomaticPush("automatic push task cancelled after waiting active sync trigger=\(trigger.rawValue)")
+                    return
+                }
+                guard self.canAttemptAutomaticBackendSync(for: scope) else {
+                    debugAutomaticPush("delayed push skipped after wait trigger=\(trigger.rawValue) reason=backend sync unavailable")
+                    return
+                }
             }
             guard self.latestAutomaticPushSignature != signature else {
                 debugAutomaticPush("delayed push skipped because signature already synced trigger=\(trigger.rawValue)")
@@ -2211,6 +2303,9 @@ final class AppSyncService: ObservableObject {
             debugAutomaticPush("performing delayed push trigger=\(trigger.rawValue) signature=\(signature)")
             debugMemorySync(
                 "perform push trigger=\(trigger.rawValue) scope=\(scope.spaceId) memories=\(self.memoryDebugSummary(memories)) tombstones=\(self.memoryTombstoneDebugSummary(memoryTombstones))"
+            )
+            debugWishSync(
+                "perform push trigger=\(trigger.rawValue) scope=\(scope.spaceId) wishes=\(self.wishDebugSummary(wishes)) tombstones=\(self.wishTombstoneDebugSummary(wishTombstones))"
             )
 
             let didPush = await self.pushCurrentScopeContentToLocalBackend(
@@ -2232,12 +2327,14 @@ final class AppSyncService: ObservableObject {
             guard didPush else {
                 debugAutomaticPush("delayed push finished trigger=\(trigger.rawValue) result=failed")
                 debugMemorySync("push failed trigger=\(trigger.rawValue) scope=\(scope.spaceId)")
+                debugWishSync("push failed trigger=\(trigger.rawValue) scope=\(scope.spaceId)")
                 return
             }
             self.latestAutomaticPushSignature = signature
             self.markPendingAutomaticPush(false)
             debugAutomaticPush("delayed push finished trigger=\(trigger.rawValue) result=success")
             debugMemorySync("push finished trigger=\(trigger.rawValue) scope=\(scope.spaceId) result=success")
+            debugWishSync("push finished trigger=\(trigger.rawValue) scope=\(scope.spaceId) result=success")
         }
     }
 
@@ -2320,6 +2417,9 @@ final class AppSyncService: ObservableObject {
                 )
                 debugMemorySync(
                     "pull stale trigger=\(trigger.rawValue) reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(self.memoryDebugSummary(payload.memories)) tombstones=\(self.memoryTombstoneDebugSummary(payload.memoryTombstones))"
+                )
+                debugWishSync(
+                    "pull stale trigger=\(trigger.rawValue) reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) wishes=\(self.wishDebugSummary(payload.wishes)) tombstones=\(self.wishTombstoneDebugSummary(payload.wishTombstones))"
                 )
                 if self.latestPulledPayload?.updatedAt == payload.updatedAt {
                     self.latestPulledPayload = nil
@@ -2674,6 +2774,9 @@ final class AppSyncService: ObservableObject {
             debugMemorySync(
                 "pull success account=\(context.accountId) user=\(context.currentUserId) space=\(payload.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
             )
+            debugWishSync(
+                "pull success account=\(context.accountId) user=\(context.currentUserId) space=\(payload.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones))"
+            )
             latestPulledPayload = payload
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPullAt = .now
@@ -2782,6 +2885,9 @@ final class AppSyncService: ObservableObject {
             debugMemorySync(
                 "push request account=\(context.accountId) user=\(context.currentUserId) space=\(target.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
             )
+            debugWishSync(
+                "push request account=\(context.accountId) user=\(context.currentUserId) space=\(target.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones))"
+            )
             if eventTextOverride == nil {
                 latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（记忆 \(payload.memories.count) 条，记忆删除标记 \(payload.memoryTombstones.count) 条，本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，小约定 \(rituals.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
             }
@@ -2792,6 +2898,9 @@ final class AppSyncService: ObservableObject {
             lastPushedSnapshotUpdatedAt = payload.updatedAt
             debugMemorySync(
                 "push success account=\(context.accountId) user=\(context.currentUserId) space=\(target.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
+            )
+            debugWishSync(
+                "push success account=\(context.accountId) user=\(context.currentUserId) space=\(target.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones))"
             )
             deferredAutomaticApplyTask?.cancel()
             deferredAutomaticApplyTask = nil
@@ -2811,6 +2920,7 @@ final class AppSyncService: ObservableObject {
             return true
         } catch {
             debugMemorySync("push error space=\(scope.spaceId) error=\(error.localizedDescription)")
+            debugWishSync("push error space=\(scope.spaceId) error=\(error.localizedDescription)")
             if shouldRecordErrors {
                 latestErrorText = error.localizedDescription
                 latestEventText = "这次没有发出 PUT /spaces/\(scope.spaceId)/snapshot"
@@ -2889,6 +2999,7 @@ final class AppSyncService: ObservableObject {
         debugMemorySync(
             "apply begin space=\(applyScope.spaceId) payloadUpdatedAt=\(latestPulledPayload.updatedAt.timeIntervalSince1970) localBefore=\(memoryDebugSummary(localBeforeEntries)) remote=\(memoryDebugSummary(remoteEffectiveEntries)) tombstones=\(memoryTombstoneDebugSummary(effectiveMemoryTombstones))"
         )
+        let localBeforeWishes = wishStore.wishes(in: applyScope)
         memoryStore.mergeRemoteEntries(
             in: applyScope,
             with: remoteEffectiveEntries
@@ -2899,6 +3010,9 @@ final class AppSyncService: ObservableObject {
         )
         let deletedWishIDs = Set(effectiveWishTombstones.map(\.id))
         let remoteEffectiveWishes = latestPulledPayload.wishes.filter { deletedWishIDs.contains($0.id) == false }
+        debugWishSync(
+            "apply begin space=\(applyScope.spaceId) payloadUpdatedAt=\(latestPulledPayload.updatedAt.timeIntervalSince1970) localBefore=\(wishDebugSummary(localBeforeWishes)) remote=\(wishDebugSummary(remoteEffectiveWishes)) tombstones=\(wishTombstoneDebugSummary(effectiveWishTombstones))"
+        )
         wishStore.mergeRemoteWishes(in: applyScope, with: remoteEffectiveWishes)
         anniversaryStore.replaceAnniversaries(in: applyScope, with: latestPulledPayload.anniversaries)
         weeklyTodoStore.replaceItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
@@ -2917,6 +3031,10 @@ final class AppSyncService: ObservableObject {
         }
         debugMemorySync(
             "apply end space=\(applyScope.spaceId) final=\(memoryDebugSummary(localAfterEntries))"
+        )
+        let localAfterWishes = wishStore.wishes(in: applyScope)
+        debugWishSync(
+            "apply end space=\(applyScope.spaceId) final=\(wishDebugSummary(localAfterWishes))"
         )
 
         lastAppliedAt = .now
@@ -3205,6 +3323,9 @@ final class AppSyncService: ObservableObject {
             debugMemorySync(
                 "automatic apply rejected stale payload reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
             )
+            debugWishSync(
+                "automatic apply rejected stale payload reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones))"
+            )
             return nil
         }
 
@@ -3242,6 +3363,9 @@ final class AppSyncService: ObservableObject {
             debugMemorySync(
                 "automatic apply delayed payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) reasons=\(delayReasons.joined(separator: "; "))"
             )
+            debugWishSync(
+                "automatic apply delayed payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) reasons=\(delayReasons.joined(separator: "; ")) wishes=\(wishDebugSummary(payload.wishes))"
+            )
         }
 
         return max(0, requiredDelay)
@@ -3268,6 +3392,9 @@ final class AppSyncService: ObservableObject {
         debugMemorySync(
             "deferred apply scheduled scope=\(scope.spaceId) delay=\(String(format: "%.2f", delay))s payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
         )
+        debugWishSync(
+            "deferred apply scheduled scope=\(scope.spaceId) delay=\(String(format: "%.2f", delay))s payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones))"
+        )
         deferredAutomaticApplyTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let nanoseconds = UInt64((delay * 1_000_000_000).rounded(.up))
@@ -3288,6 +3415,9 @@ final class AppSyncService: ObservableObject {
                 debugMemorySync(
                     "deferred apply dropped stale payload reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)"
                 )
+                debugWishSync(
+                    "deferred apply dropped stale payload reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)"
+                )
                 if self.latestPulledPayload?.updatedAt == payload.updatedAt {
                     self.latestPulledPayload = nil
                 }
@@ -3297,6 +3427,9 @@ final class AppSyncService: ObservableObject {
             guard let recheckDelay = self.automaticApplyDelayIfPossible(for: payload, into: scope) else { return }
             if recheckDelay > 0 {
                 debugMemorySync(
+                    "deferred apply rescheduled payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) delay=\(String(format: "%.2f", recheckDelay))s"
+                )
+                debugWishSync(
                     "deferred apply rescheduled payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) delay=\(String(format: "%.2f", recheckDelay))s"
                 )
                 self.scheduleDeferredAutomaticApplyIfPossible(
@@ -3316,6 +3449,7 @@ final class AppSyncService: ObservableObject {
             }
 
             debugMemorySync("deferred apply execute payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)")
+            debugWishSync("deferred apply execute payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)")
             let didApply = self.applyLatestPulledContent(
                 to: scope,
                 memoryStore: memoryStore,
@@ -3330,6 +3464,7 @@ final class AppSyncService: ObservableObject {
             )
             if didApply {
                 debugMemorySync("deferred apply finished payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) result=success")
+                debugWishSync("deferred apply finished payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) result=success")
                 self.lastDeferredRemoteUpdatedAt = nil
             }
         }
@@ -3386,6 +3521,34 @@ final class AppSyncService: ObservableObject {
         return "[\(ids)]"
     }
 
+    private func wishDebugSummary(_ wishes: [PlaceWish]) -> String {
+        if wishes.isEmpty {
+            return "[]"
+        }
+
+        let ids = wishes
+            .sorted { $0.updatedAt < $1.updatedAt }
+            .map {
+                "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)|category=\($0.category.rawValue)|status=\($0.status.rawValue)"
+            }
+            .joined(separator: ",")
+        return "[\(ids)]"
+    }
+
+    private func wishTombstoneDebugSummary(_ tombstones: [WishDeletionTombstone]) -> String {
+        if tombstones.isEmpty {
+            return "[]"
+        }
+
+        let ids = tombstones
+            .sorted { $0.deletedAt < $1.deletedAt }
+            .map {
+                "\($0.id.uuidString.lowercased())|deletedBy=\($0.deletedByUserId)|deletedAt=\($0.deletedAt.timeIntervalSince1970)"
+            }
+            .joined(separator: ",")
+        return "[\(ids)]"
+    }
+
     private func notePendingPulledContentIfNeeded(
         _ payload: SyncContentPayload,
         trigger: AutomaticSyncTrigger
@@ -3396,6 +3559,9 @@ final class AppSyncService: ObservableObject {
 
         lastDeferredRemoteUpdatedAt = payload.updatedAt
         latestErrorText = nil
+        debugWishSync(
+            "pending pulled payload trigger=\(trigger.rawValue) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) wishes=\(wishDebugSummary(payload.wishes)) tombstones=\(wishTombstoneDebugSummary(payload.wishTombstones))"
+        )
         switch trigger {
         case .appBecameActive:
             latestEventText = "回到前台后发现新的共享内容，可手动应用"
