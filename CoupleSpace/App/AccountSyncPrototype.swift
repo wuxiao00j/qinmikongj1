@@ -77,7 +77,14 @@ private func wishDebugSummary(_ wishes: [PlaceWish]) -> String {
     let ids = wishes
         .sorted { $0.updatedAt < $1.updatedAt }
         .map {
-            "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)|category=\($0.category.rawValue)|status=\($0.status.rawValue)"
+            String(
+                format: "%@|user=%@|updatedAt=%.6f|category=%@|status=%@",
+                $0.id.uuidString.lowercased(),
+                $0.createdByUserId,
+                $0.updatedAt.timeIntervalSince1970,
+                $0.category.rawValue,
+                $0.status.rawValue
+            )
         }
         .joined(separator: ",")
     return "[\(ids)]"
@@ -91,7 +98,12 @@ private func wishTombstoneDebugSummary(_ tombstones: [WishDeletionTombstone]) ->
     let ids = tombstones
         .sorted { $0.deletedAt < $1.deletedAt }
         .map {
-            "\($0.id.uuidString.lowercased())|deletedBy=\($0.deletedByUserId)|deletedAt=\($0.deletedAt.timeIntervalSince1970)"
+            String(
+                format: "%@|deletedBy=%@|deletedAt=%.6f",
+                $0.id.uuidString.lowercased(),
+                $0.deletedByUserId,
+                $0.deletedAt.timeIntervalSince1970
+            )
         }
         .joined(separator: ",")
     return "[\(ids)]"
@@ -3865,6 +3877,7 @@ private struct StoredRemoteWish: Codable {
     let createdByUserId: String
     let createdAt: Date
     let updatedAt: Date
+    let updatedAtTimestamp: TimeInterval?
     let syncStatusRawValue: String
 
     init(_ wish: PlaceWish) {
@@ -3880,11 +3893,13 @@ private struct StoredRemoteWish: Codable {
         createdByUserId = wish.createdByUserId
         createdAt = wish.createdAt
         updatedAt = wish.updatedAt
+        updatedAtTimestamp = wish.updatedAt.timeIntervalSince1970
         syncStatusRawValue = wish.syncStatus.rawValue
     }
 
     var model: PlaceWish {
-        PlaceWish(
+        let resolvedUpdatedAt = updatedAtTimestamp.map(Date.init(timeIntervalSince1970:)) ?? updatedAt
+        return PlaceWish(
             id: id,
             title: title,
             detail: detail,
@@ -3896,7 +3911,7 @@ private struct StoredRemoteWish: Codable {
             spaceId: spaceId,
             createdByUserId: createdByUserId,
             createdAt: createdAt,
-            updatedAt: updatedAt,
+            updatedAt: resolvedUpdatedAt,
             syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
         )
     }

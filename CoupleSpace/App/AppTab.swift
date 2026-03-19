@@ -652,7 +652,14 @@ final class WishStore: ObservableObject {
         let summary = wishes
             .sorted { $0.updatedAt < $1.updatedAt }
             .map {
-                "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)|category=\($0.category.rawValue)|status=\($0.status.rawValue)"
+                String(
+                    format: "%@|user=%@|updatedAt=%.6f|category=%@|status=%@",
+                    $0.id.uuidString.lowercased(),
+                    $0.createdByUserId,
+                    $0.updatedAt.timeIntervalSince1970,
+                    $0.category.rawValue,
+                    $0.status.rawValue
+                )
             }
             .joined(separator: ",")
         return "[\(summary)]"
@@ -666,7 +673,12 @@ final class WishStore: ObservableObject {
         let summary = tombstones
             .sorted { $0.deletedAt < $1.deletedAt }
             .map {
-                "\($0.id.uuidString.lowercased())|deletedBy=\($0.deletedByUserId)|deletedAt=\($0.deletedAt.timeIntervalSince1970)"
+                String(
+                    format: "%@|deletedBy=%@|deletedAt=%.6f",
+                    $0.id.uuidString.lowercased(),
+                    $0.deletedByUserId,
+                    $0.deletedAt.timeIntervalSince1970
+                )
             }
             .joined(separator: ",")
         return "[\(summary)]"
@@ -1534,6 +1546,7 @@ private struct StoredWish: Codable {
     let createdByUserId: String?
     let createdAt: Date?
     let updatedAt: Date?
+    let updatedAtTimestamp: TimeInterval?
     let syncStatusRawValue: String?
 
     init(wish: PlaceWish) {
@@ -1549,11 +1562,15 @@ private struct StoredWish: Codable {
         createdByUserId = wish.createdByUserId
         createdAt = wish.createdAt
         updatedAt = wish.updatedAt
+        updatedAtTimestamp = wish.updatedAt.timeIntervalSince1970
         syncStatusRawValue = wish.syncStatus.rawValue
     }
 
     var model: PlaceWish {
         let resolvedCreatedAt = createdAt ?? .now
+        let resolvedUpdatedAt = updatedAtTimestamp.map(Date.init(timeIntervalSince1970:))
+            ?? updatedAt
+            ?? resolvedCreatedAt
         return PlaceWish(
             id: id,
             title: title,
@@ -1566,7 +1583,7 @@ private struct StoredWish: Codable {
             spaceId: spaceId ?? AppDataDefaults.localSpaceId,
             createdByUserId: createdByUserId ?? AppDataDefaults.localUserId,
             createdAt: resolvedCreatedAt,
-            updatedAt: updatedAt ?? resolvedCreatedAt,
+            updatedAt: resolvedUpdatedAt,
             syncStatus: SyncStatus(rawValue: syncStatusRawValue ?? "") ?? .localOnly
         )
     }

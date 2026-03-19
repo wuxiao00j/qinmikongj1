@@ -184,6 +184,7 @@ class StoredRemoteWishModel(BaseModel):
     createdByUserId: str
     createdAt: datetime
     updatedAt: datetime
+    updatedAtTimestamp: float | None = None
     syncStatusRawValue: str
 
 
@@ -772,10 +773,14 @@ def wish_debug_summary(wishes: list[StoredRemoteWishModel]) -> str:
         return "[]"
 
     summary = ",".join(
-        f"{wish.id}|user={wish.createdByUserId}|updatedAt={wish.updatedAt.timestamp()}|category={wish.categoryRawValue}|status={wish.statusRawValue}"
-        for wish in sorted(wishes, key=lambda item: item.updatedAt)
+        f"{wish.id}|user={wish.createdByUserId}|updatedAt={wish_updated_at_value(wish)}|category={wish.categoryRawValue}|status={wish.statusRawValue}"
+        for wish in sorted(wishes, key=wish_updated_at_value)
     )
     return f"[{summary}]"
+
+
+def wish_updated_at_value(wish: StoredRemoteWishModel) -> float:
+    return wish.updatedAtTimestamp if wish.updatedAtTimestamp is not None else wish.updatedAt.timestamp()
 
 
 def merge_wish_snapshot_state(
@@ -802,7 +807,16 @@ def merge_wish_snapshot_state(
     }
     for wish in incoming_snapshot.wishes:
         existing_wish = merged_wishes_by_id.get(wish.id)
-        if existing_wish is None or wish.updatedAt >= existing_wish.updatedAt:
+        if existing_wish is not None:
+            logger.info(
+                "snapshot wish conflict id=%s existing_updated_at=%s incoming_updated_at=%s existing_category=%s incoming_category=%s",
+                wish.id,
+                wish_updated_at_value(existing_wish),
+                wish_updated_at_value(wish),
+                existing_wish.categoryRawValue,
+                wish.categoryRawValue,
+            )
+        if existing_wish is None or wish_updated_at_value(wish) >= wish_updated_at_value(existing_wish):
             merged_wishes_by_id[wish.id] = wish
 
     merged_tombstones = sorted(
@@ -815,7 +829,7 @@ def merge_wish_snapshot_state(
             list(merged_wishes_by_id.values()),
             merged_tombstones,
         ),
-        key=lambda item: item.updatedAt,
+        key=wish_updated_at_value,
         reverse=True,
     )
 
