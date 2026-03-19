@@ -1,6 +1,14 @@
 import Combine
 import Foundation
 
+#if DEBUG
+private func debugWhisperSync(_ message: @autoclosure () -> String) {
+    print("[WhisperSync] \(message())")
+}
+#else
+private func debugWhisperSync(_ message: @autoclosure () -> String) {}
+#endif
+
 // MARK: - Account Session
 
 enum AccountSessionMode: String, Codable {
@@ -122,17 +130,34 @@ struct AccountSessionAuthorization: Codable, Equatable {
     }
 }
 
+private func normalizedVisibleAppName(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.isEmpty == false else { return "余白" }
+
+    let normalized = trimmed.lowercased()
+    let legacyNames = [
+        "couplespace",
+        "couple space",
+        "情侣空间",
+        "couple space account",
+        "couple space id"
+    ]
+
+    return legacyNames.contains(normalized) ? "余白" : trimmed
+}
+
 extension AccountProfile {
     static func fromAuthenticatedPayload(_ payload: AuthenticatedAccountPayload) -> AccountProfile {
+        let providerName = normalizedVisibleAppName(payload.providerName)
         let resolvedHint = payload.accountHint?.trimmingCharacters(in: .whitespacesAndNewlines)
         let detailText = resolvedHint?.isEmpty == false
             ? resolvedHint!
-            : "\(payload.providerName) 账号"
+            : providerName
 
         return AccountProfile(
             accountId: payload.accountId,
             nickname: payload.displayName,
-            providerName: payload.providerName,
+            providerName: providerName,
             detailText: detailText
         )
     }
@@ -287,11 +312,12 @@ struct SyncContentPayload {
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
     let currentStatuses: [CurrentStatusItem]
+    let whisperNotes: [WhisperNoteItem]
     let relationStatus: CoupleRelationStatus
     let updatedAt: Date
 
     var totalCount: Int {
-        memories.count + wishes.count + anniversaries.count + weeklyTodos.count + currentStatuses.count
+        memories.count + wishes.count + anniversaries.count + weeklyTodos.count + currentStatuses.count + whisperNotes.count
     }
 
     var memoryCount: Int {
@@ -314,6 +340,10 @@ struct SyncContentPayload {
         currentStatuses.count
     }
 
+    var whisperNoteCount: Int {
+        whisperNotes.count
+    }
+
     static func fromRemoteSnapshotPayload(_ payload: RemoteSyncSnapshotPayload) -> SyncContentPayload {
         SyncContentPayload(
             scope: payload.contentScope,
@@ -322,6 +352,7 @@ struct SyncContentPayload {
             anniversaries: payload.anniversaries,
             weeklyTodos: payload.weeklyTodos,
             currentStatuses: payload.currentStatuses,
+            whisperNotes: payload.whisperNotes,
             relationStatus: payload.relationStatus,
             updatedAt: payload.updatedAt
         )
@@ -342,6 +373,7 @@ struct RemoteSyncSnapshotPayload {
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
     let currentStatuses: [CurrentStatusItem]
+    let whisperNotes: [WhisperNoteItem]
     let relationStatus: CoupleRelationStatus
     let updatedAt: Date
 
@@ -365,6 +397,8 @@ struct SyncStatusSnapshot {
     let remoteSummary: SyncRemotePayloadSummary?
     let isSyncing: Bool
     let canApplyPulledContent: Bool
+    let hasPendingPulledContent: Bool
+    let pendingPulledContentText: String?
     let lastPushAt: Date?
     let lastPullAt: Date?
     let lastAppliedAt: Date?
@@ -410,10 +444,11 @@ struct SyncRemotePayloadSummary: Equatable {
     let anniversaryCount: Int
     let weeklyTodoCount: Int
     let currentStatusCount: Int
+    let whisperNoteCount: Int
     let updatedAt: Date
 
     var totalCount: Int {
-        memoryCount + wishCount + anniversaryCount + weeklyTodoCount + currentStatusCount
+        memoryCount + wishCount + anniversaryCount + weeklyTodoCount + currentStatusCount + whisperNoteCount
     }
 
     init(
@@ -424,6 +459,7 @@ struct SyncRemotePayloadSummary: Equatable {
         anniversaryCount: Int,
         weeklyTodoCount: Int,
         currentStatusCount: Int,
+        whisperNoteCount: Int,
         updatedAt: Date
     ) {
         self.spaceId = spaceId
@@ -433,6 +469,7 @@ struct SyncRemotePayloadSummary: Equatable {
         self.anniversaryCount = anniversaryCount
         self.weeklyTodoCount = weeklyTodoCount
         self.currentStatusCount = currentStatusCount
+        self.whisperNoteCount = whisperNoteCount
         self.updatedAt = updatedAt
     }
 
@@ -444,7 +481,46 @@ struct SyncRemotePayloadSummary: Equatable {
         self.anniversaryCount = payload.anniversaryCount
         self.weeklyTodoCount = payload.weeklyTodoCount
         self.currentStatusCount = payload.currentStatusCount
+        self.whisperNoteCount = payload.whisperNoteCount
         self.updatedAt = payload.updatedAt
+    }
+}
+
+enum AutomaticSyncTrigger: String {
+    case wishesChanged
+    case weeklyTodosChanged
+    case currentStatusesChanged
+    case whisperNotesChanged
+    case appBecameActive
+    case meViewAppeared
+    case accountSyncAppeared
+
+    var automaticPushEventText: String {
+        switch self {
+        case .wishesChanged:
+            return "已自动同步最新愿望改动到测试环境"
+        case .weeklyTodosChanged:
+            return "已自动同步最新本周事项到测试环境"
+        case .currentStatusesChanged:
+            return "已自动同步最新当前状态到测试环境"
+        case .whisperNotesChanged:
+            return "已自动同步最新悄悄话到测试环境"
+        case .appBecameActive, .meViewAppeared, .accountSyncAppeared:
+            return "已自动同步最近内容到测试环境"
+        }
+    }
+
+    var automaticPullEventText: String {
+        switch self {
+        case .appBecameActive:
+            return "已在回到前台后检查最近云端快照"
+        case .meViewAppeared:
+            return "已在进入“我的”页时检查最近云端快照"
+        case .accountSyncAppeared:
+            return "已在进入“账号与同步”页时检查最近云端快照"
+        case .wishesChanged, .weeklyTodosChanged, .currentStatusesChanged, .whisperNotesChanged:
+            return "已检查最近云端快照"
+        }
     }
 }
 
@@ -1048,6 +1124,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
     let currentStatuses: [StoredRemoteCurrentStatus]
+    let whisperNotes: [StoredRemoteWhisperNote]
     let relationStatusRawValue: String?
     let updatedAt: Date?
 
@@ -1064,6 +1141,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         case anniversaries
         case weeklyTodos
         case currentStatuses
+        case whisperNotes
         case relationStatusRawValue
         case relationStatus
         case updatedAt
@@ -1084,6 +1162,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
         currentStatuses = try container.decodeIfPresent([StoredRemoteCurrentStatus].self, forKey: .currentStatuses) ?? []
+        whisperNotes = try container.decodeIfPresent([StoredRemoteWhisperNote].self, forKey: .whisperNotes) ?? []
         relationStatusRawValue = try container.decodeIfPresent(String.self, forKey: .relationStatusRawValue)
             ?? container.decodeIfPresent(String.self, forKey: .relationStatus)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
@@ -1146,6 +1225,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
             currentStatuses: currentStatuses.map(\.model),
+            whisperNotes: whisperNotes.map(\.model),
             relationStatus: relationStatus,
             updatedAt: updatedAt
         )
@@ -1237,6 +1317,7 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
         encoder.dateEncodingStrategy = .iso8601
 
         do {
+            debugWhisperSync("encode push payload space=\(payload.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
             return try encoder.encode(StoredRemotePayload(payload: payload))
         } catch {
             throw RealSyncRemoteProviderError.requestEncodingFailed(operation: "pushContent")
@@ -1306,18 +1387,22 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
 
         if let envelope = try? decoder.decode(RealSyncRemotePullEnvelope.self, from: data),
            let snapshot = envelope.resolvedSnapshot {
-            return try snapshot.remoteSnapshotPayload(
+            let payload = try snapshot.remoteSnapshotPayload(
                 for: context,
                 fallbackSnapshotId: responseSnapshotIdentifier(from: response)
             )
+            debugWhisperSync("decode pull payload space=\(payload.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            return payload
         }
 
         do {
             let snapshot = try decoder.decode(RealSyncRemoteSnapshotResponse.self, from: data)
-            return try snapshot.remoteSnapshotPayload(
+            let payload = try snapshot.remoteSnapshotPayload(
                 for: context,
                 fallbackSnapshotId: responseSnapshotIdentifier(from: response)
             )
+            debugWhisperSync("decode pull payload space=\(payload.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            return payload
         } catch let providerError as RealSyncRemoteProviderError {
             throw providerError
         } catch {
@@ -1457,7 +1542,7 @@ final class AccountSessionStore: ObservableObject {
             account: AccountProfile(
                 accountId: "acct-demo-\(resolvedName.lowercased())",
                 nickname: resolvedName,
-                providerName: "Couple Space ID",
+                providerName: "余白",
                 detailText: "云端准备状态"
             ),
             authorization: nil,
@@ -1554,8 +1639,20 @@ final class AppSyncService: ObservableObject {
     private var lastPushAt: Date?
     private var lastPullAt: Date?
     private var lastAppliedAt: Date?
+    private var lastAppliedRemoteUpdatedAt: Date?
+    private var lastDeferredRemoteUpdatedAt: Date?
     private var latestEventText: String?
     private var latestErrorText: String?
+    private var automaticPushTask: Task<Void, Never>?
+    private var automaticPullTask: Task<Void, Never>?
+    private var latestAutomaticPushSignature: String?
+    private var lastAutomaticPullAt: Date?
+    private var automaticPushSuppressedUntil: Date?
+    private var lastLocalSharedContentMutationAt: Date?
+    private let automaticPushDebounceNanoseconds: UInt64 = 1_500_000_000
+    private let automaticPullMinimumInterval: TimeInterval = 20
+    private let automaticApplyLocalMutationCooldown: TimeInterval = 8
+    private let automaticApplyRecentPushCooldown: TimeInterval = 6
 
     init(
         sessionStore: AccountSessionStore,
@@ -1577,6 +1674,7 @@ final class AppSyncService: ObservableObject {
             lastPushAt: nil,
             lastPullAt: nil,
             lastAppliedAt: nil,
+            lastAppliedRemoteUpdatedAt: nil,
             latestEventText: nil,
             latestErrorText: nil
         )
@@ -1650,6 +1748,14 @@ final class AppSyncService: ObservableObject {
     }
 
     func returnToLocalMode() {
+        automaticPushTask?.cancel()
+        automaticPullTask?.cancel()
+        latestAutomaticPushSignature = nil
+        lastAutomaticPullAt = nil
+        automaticPushSuppressedUntil = nil
+        lastLocalSharedContentMutationAt = nil
+        lastAppliedRemoteUpdatedAt = nil
+        lastDeferredRemoteUpdatedAt = nil
         sessionStore.clearSession()
         remoteSummary = nil
         latestPulledPayload = nil
@@ -1658,12 +1764,132 @@ final class AppSyncService: ObservableObject {
         publishStatus()
     }
 
+    func scheduleAutomaticPushIfPossible(
+        memories: [MemoryTimelineEntry],
+        wishes: [PlaceWish],
+        anniversaries: [AnniversaryItem],
+        weeklyTodos: [WeeklyTodoItem],
+        currentStatuses: [CurrentStatusItem],
+        whisperNotes: [WhisperNoteItem],
+        scope: AppContentScope,
+        trigger: AutomaticSyncTrigger
+    ) {
+        guard canAttemptAutomaticBackendSync(for: scope) else { return }
+        if let suppressedUntil = automaticPushSuppressedUntil, suppressedUntil > .now {
+            return
+        }
+        lastLocalSharedContentMutationAt = .now
+
+        let signature = automaticPushSignature(
+            memories: memories,
+            wishes: wishes,
+            anniversaries: anniversaries,
+            weeklyTodos: weeklyTodos,
+            currentStatuses: currentStatuses,
+            whisperNotes: whisperNotes,
+            scope: scope
+        )
+
+        automaticPushTask?.cancel()
+        automaticPushTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            do {
+                try await Task.sleep(nanoseconds: self.automaticPushDebounceNanoseconds)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            guard self.canAttemptAutomaticBackendSync(for: scope) else { return }
+            guard self.isSyncing == false else { return }
+            if let suppressedUntil = self.automaticPushSuppressedUntil, suppressedUntil > .now {
+                return
+            }
+            guard self.latestAutomaticPushSignature != signature else { return }
+
+            let didPush = await self.pushCurrentScopeContentToLocalBackend(
+                memories: memories,
+                wishes: wishes,
+                anniversaries: anniversaries,
+                weeklyTodos: weeklyTodos,
+                currentStatuses: currentStatuses,
+                whisperNotes: whisperNotes,
+                scope: scope,
+                eventTextOverride: trigger.automaticPushEventText,
+                shouldRecordErrors: false
+            )
+
+            guard didPush else { return }
+            self.latestAutomaticPushSignature = signature
+        }
+    }
+
+    func scheduleAutomaticPullIfPossible(
+        scope: AppContentScope,
+        memoryStore: MemoryStore,
+        wishStore: WishStore,
+        anniversaryStore: AnniversaryStore,
+        weeklyTodoStore: WeeklyTodoStore,
+        currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore,
+        trigger: AutomaticSyncTrigger
+    ) {
+        guard canAttemptAutomaticBackendSync(for: scope) else { return }
+        guard isSyncing == false else { return }
+        if let lastAutomaticPullAt, Date().timeIntervalSince(lastAutomaticPullAt) < automaticPullMinimumInterval {
+            return
+        }
+
+        automaticPullTask?.cancel()
+        automaticPullTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard self.canAttemptAutomaticBackendSync(for: scope) else { return }
+            guard self.isSyncing == false else { return }
+
+            self.lastAutomaticPullAt = .now
+            guard let payload = await self.pullCurrentScopeContentFromLocalBackend(
+                scope: scope,
+                eventTextOverride: trigger.automaticPullEventText,
+                shouldRecordErrors: false
+            ) else {
+                return
+            }
+
+            let shouldAutoApply = self.shouldAutomaticallyApplyPulledContent(
+                payload,
+                into: scope
+            )
+
+            guard shouldAutoApply else {
+                self.notePendingPulledContentIfNeeded(payload, trigger: trigger)
+                return
+            }
+
+            let didApply = self.applyLatestPulledContent(
+                to: scope,
+                memoryStore: memoryStore,
+                wishStore: wishStore,
+                anniversaryStore: anniversaryStore,
+                weeklyTodoStore: weeklyTodoStore,
+                currentStatusStore: currentStatusStore,
+                whisperNoteStore: whisperNoteStore,
+                eventTextOverride: "已自动应用最近共享内容"
+            )
+
+            if didApply {
+                self.lastDeferredRemoteUpdatedAt = nil
+            }
+        }
+    }
+
     func buildSnapshot(
         memories: [MemoryTimelineEntry],
         wishes: [PlaceWish],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         currentStatuses: [CurrentStatusItem],
+        whisperNotes: [WhisperNoteItem],
         scope: AppContentScope
     ) -> SyncContentPayload {
         SyncContentPayload(
@@ -1673,6 +1899,7 @@ final class AppSyncService: ObservableObject {
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
             currentStatuses: currentStatuses,
+            whisperNotes: whisperNotes,
             relationStatus: relationshipStore.state.relationStatus,
             updatedAt: .now
         )
@@ -1693,7 +1920,8 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
-        currentStatusStore: CurrentStatusStore
+        currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore
     ) -> Bool {
         guard sessionStore.state.sessionSource == .authenticated else {
             latestErrorText = "请先接入一份可用账号结果。"
@@ -1724,7 +1952,8 @@ final class AppSyncService: ObservableObject {
             wishStore: wishStore,
             anniversaryStore: anniversaryStore,
             weeklyTodoStore: weeklyTodoStore,
-            currentStatusStore: currentStatusStore
+            currentStatusStore: currentStatusStore,
+            whisperNoteStore: whisperNoteStore
         )
     }
 
@@ -1820,6 +2049,7 @@ final class AppSyncService: ObservableObject {
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         currentStatuses: [CurrentStatusItem],
+        whisperNotes: [WhisperNoteItem],
         scope: AppContentScope
     ) async -> Bool {
         isSyncing = true
@@ -1833,6 +2063,7 @@ final class AppSyncService: ObservableObject {
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
             currentStatuses: currentStatuses,
+            whisperNotes: whisperNotes,
             scope: scope
         )
 
@@ -1880,27 +2111,53 @@ final class AppSyncService: ObservableObject {
 
     @discardableResult
     func pullCurrentScopeContentFromLocalBackend(scope: AppContentScope) async -> SyncContentPayload? {
+        await pullCurrentScopeContentFromLocalBackend(
+            scope: scope,
+            eventTextOverride: nil,
+            shouldRecordErrors: true
+        )
+    }
+
+    @discardableResult
+    private func pullCurrentScopeContentFromLocalBackend(
+        scope: AppContentScope,
+        eventTextOverride: String?,
+        shouldRecordErrors: Bool
+    ) async -> SyncContentPayload? {
         isSyncing = true
-        latestErrorText = nil
-        latestEventText = "正在从测试环境读取最近快照"
+        if shouldRecordErrors {
+            latestErrorText = nil
+        }
+        if eventTextOverride == nil {
+            latestEventText = "正在从测试环境读取最近快照"
+        }
         publishStatus()
 
         do {
             let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
             let context = target.context
-            latestEventText = "正在以 \(context.accountId) / \(context.currentUserId) 读取 GET /spaces/\(context.spaceId)/snapshot"
+            if eventTextOverride == nil {
+                latestEventText = "正在以 \(context.accountId) / \(context.currentUserId) 读取 GET /spaces/\(context.spaceId)/snapshot"
+            }
             publishStatus()
             let payload = try await realSyncProvider.pullContent(for: context)
+            debugWhisperSync("pull complete space=\(payload.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
             latestPulledPayload = payload
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPullAt = .now
-            latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 从测试环境拉取最近快照"
+            latestEventText = eventTextOverride
+                ?? "已以 \(context.accountId) / \(context.currentUserId) 从测试环境拉取最近快照"
+            if shouldRecordErrors {
+                latestErrorText = nil
+            }
             isSyncing = false
             publishStatus()
             return payload
         } catch {
-            latestErrorText = error.localizedDescription
-            latestEventText = "这次没有从测试环境拉取到快照"
+            if shouldRecordErrors {
+                latestErrorText = error.localizedDescription
+                latestEventText = "这次没有从测试环境拉取到快照"
+            }
             isSyncing = false
             publishStatus()
             return nil
@@ -1914,38 +2171,80 @@ final class AppSyncService: ObservableObject {
         anniversaries: [AnniversaryItem],
         weeklyTodoStore: WeeklyTodoStore,
         currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore,
         scope: AppContentScope
     ) async -> Bool {
+        let resolvedWeeklyTodos = weeklyTodoStore.items(in: scope)
+        let resolvedCurrentStatuses = currentStatusStore.items(in: scope)
+        let resolvedWhisperNotes = whisperNoteStore.items(in: scope)
+
+        return await pushCurrentScopeContentToLocalBackend(
+            memories: memories,
+            wishes: wishes,
+            anniversaries: anniversaries,
+            weeklyTodos: resolvedWeeklyTodos,
+            currentStatuses: resolvedCurrentStatuses,
+            whisperNotes: resolvedWhisperNotes,
+            scope: scope,
+            eventTextOverride: nil,
+            shouldRecordErrors: true
+        )
+    }
+
+    @discardableResult
+    private func pushCurrentScopeContentToLocalBackend(
+        memories: [MemoryTimelineEntry],
+        wishes: [PlaceWish],
+        anniversaries: [AnniversaryItem],
+        weeklyTodos: [WeeklyTodoItem],
+        currentStatuses: [CurrentStatusItem],
+        whisperNotes: [WhisperNoteItem],
+        scope: AppContentScope,
+        eventTextOverride: String?,
+        shouldRecordErrors: Bool
+    ) async -> Bool {
         isSyncing = true
-        latestErrorText = nil
-        latestEventText = "正在把当前内容同步到测试环境"
+        if shouldRecordErrors {
+            latestErrorText = nil
+        }
+        if eventTextOverride == nil {
+            latestEventText = "正在把当前内容同步到测试环境"
+        }
         publishStatus()
 
         do {
             let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
             let context = target.context
-            let resolvedWeeklyTodos = weeklyTodoStore.items(in: target.scope)
-            let resolvedCurrentStatuses = currentStatusStore.items(in: target.scope)
             let payload = buildSnapshot(
                 memories: memories,
                 wishes: wishes,
                 anniversaries: anniversaries,
-                weeklyTodos: resolvedWeeklyTodos,
-                currentStatuses: resolvedCurrentStatuses,
+                weeklyTodos: weeklyTodos,
+                currentStatuses: currentStatuses,
+                whisperNotes: whisperNotes,
                 scope: target.scope
             )
-            latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(resolvedWeeklyTodos.count) 条，当前状态 \(resolvedCurrentStatuses.count) 条）"
+            debugWhisperSync("prepare push snapshot space=\(target.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            if eventTextOverride == nil {
+                latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
+            }
             publishStatus()
             try await realSyncProvider.pushContent(payload, context: context)
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPushAt = .now
-            latestEventText = "已发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(resolvedWeeklyTodos.count) 条，当前状态 \(resolvedCurrentStatuses.count) 条）"
+            latestEventText = eventTextOverride
+                ?? "已发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
+            if shouldRecordErrors {
+                latestErrorText = nil
+            }
             isSyncing = false
             publishStatus()
             return true
         } catch {
-            latestErrorText = error.localizedDescription
-            latestEventText = "这次没有发出 PUT /spaces/\(scope.spaceId)/snapshot"
+            if shouldRecordErrors {
+                latestErrorText = error.localizedDescription
+                latestEventText = "这次没有发出 PUT /spaces/\(scope.spaceId)/snapshot"
+            }
             isSyncing = false
             publishStatus()
             return false
@@ -1959,7 +2258,31 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
-        currentStatusStore: CurrentStatusStore
+        currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore
+    ) -> Bool {
+        applyLatestPulledContent(
+            to: scope,
+            memoryStore: memoryStore,
+            wishStore: wishStore,
+            anniversaryStore: anniversaryStore,
+            weeklyTodoStore: weeklyTodoStore,
+            currentStatusStore: currentStatusStore,
+            whisperNoteStore: whisperNoteStore,
+            eventTextOverride: nil
+        )
+    }
+
+    @discardableResult
+    private func applyLatestPulledContent(
+        to scope: AppContentScope,
+        memoryStore: MemoryStore,
+        wishStore: WishStore,
+        anniversaryStore: AnniversaryStore,
+        weeklyTodoStore: WeeklyTodoStore,
+        currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore,
+        eventTextOverride: String?
     ) -> Bool {
         guard let latestPulledPayload else {
             latestErrorText = "还没有可应用到当前空间的云端内容。"
@@ -1976,15 +2299,25 @@ final class AppSyncService: ObservableObject {
         }
 
         let applyScope = latestPulledPayload.scope
+        debugWhisperSync("apply latest payload space=\(applyScope.spaceId) whisperNotes=\(latestPulledPayload.whisperNotes.count)")
+        automaticPushSuppressedUntil = Date().addingTimeInterval(2)
         memoryStore.replaceEntries(in: applyScope, with: latestPulledPayload.memories)
         wishStore.replaceWishes(in: applyScope, with: latestPulledPayload.wishes)
         anniversaryStore.replaceAnniversaries(in: applyScope, with: latestPulledPayload.anniversaries)
         weeklyTodoStore.replaceItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
         currentStatusStore.replaceStatuses(in: applyScope, with: latestPulledPayload.currentStatuses)
+        whisperNoteStore.replaceItems(in: applyScope, with: latestPulledPayload.whisperNotes)
+        debugWhisperSync("apply finished space=\(applyScope.spaceId) storeWhisperNotes=\(whisperNoteStore.items(in: applyScope).count)")
 
         lastAppliedAt = .now
+        lastAppliedRemoteUpdatedAt = latestPulledPayload.updatedAt
+        if let lastDeferredRemoteUpdatedAt,
+           latestPulledPayload.updatedAt >= lastDeferredRemoteUpdatedAt {
+            self.lastDeferredRemoteUpdatedAt = nil
+        }
         latestErrorText = nil
-        latestEventText = "已将最近云端内容应用到当前空间（本周事项 \(latestPulledPayload.weeklyTodos.count) 条，当前状态 \(latestPulledPayload.currentStatuses.count) 条）"
+        latestEventText = eventTextOverride
+            ?? "已将最近云端内容应用到当前空间（本周事项 \(latestPulledPayload.weeklyTodos.count) 条，当前状态 \(latestPulledPayload.currentStatuses.count) 条，悄悄话 \(latestPulledPayload.whisperNotes.count) 条）"
         publishStatus()
         return true
     }
@@ -1996,7 +2329,8 @@ final class AppSyncService: ObservableObject {
         wishStore: WishStore,
         anniversaryStore: AnniversaryStore,
         weeklyTodoStore: WeeklyTodoStore,
-        currentStatusStore: CurrentStatusStore
+        currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore
     ) async -> Bool {
         isSyncing = true
         latestErrorText = nil
@@ -2020,12 +2354,13 @@ final class AppSyncService: ObservableObject {
                 wishStore: wishStore,
                 anniversaryStore: anniversaryStore,
                 weeklyTodoStore: weeklyTodoStore,
-                currentStatusStore: currentStatusStore
+                currentStatusStore: currentStatusStore,
+                whisperNoteStore: whisperNoteStore
             )
 
             if didApply {
                 latestErrorText = nil
-                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照（本周事项 \(payload.weeklyTodos.count) 条，当前状态 \(payload.currentStatuses.count) 条）"
+                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照（本周事项 \(payload.weeklyTodos.count) 条，当前状态 \(payload.currentStatuses.count) 条，悄悄话 \(payload.whisperNotes.count) 条）"
             }
 
             isSyncing = false
@@ -2054,6 +2389,7 @@ final class AppSyncService: ObservableObject {
             lastPushAt: lastPushAt,
             lastPullAt: lastPullAt,
             lastAppliedAt: lastAppliedAt,
+            lastAppliedRemoteUpdatedAt: lastAppliedRemoteUpdatedAt,
             latestEventText: latestEventText,
             latestErrorText: latestErrorText
         )
@@ -2069,6 +2405,7 @@ final class AppSyncService: ObservableObject {
         lastPushAt: Date?,
         lastPullAt: Date?,
         lastAppliedAt: Date?,
+        lastAppliedRemoteUpdatedAt: Date?,
         latestEventText: String?,
         latestErrorText: String?
     ) -> SyncStatusSnapshot {
@@ -2094,6 +2431,18 @@ final class AppSyncService: ObservableObject {
             detail = "这里会继续统一展示账号状态、同步进度和云端空间连接结果。"
         }
 
+        let hasPendingPulledContent: Bool
+        let pendingPulledContentText: String?
+        if let latestPulledPayload,
+           latestPulledPayload.scope == relationship.contentScope,
+           lastAppliedRemoteUpdatedAt.map({ latestPulledPayload.updatedAt > $0 }) ?? true {
+            hasPendingPulledContent = true
+            pendingPulledContentText = "发现新的共享内容，可手动应用"
+        } else {
+            hasPendingPulledContent = false
+            pendingPulledContentText = nil
+        }
+
         return SyncStatusSnapshot(
             mode: mode,
             isUsingLocalData: true,
@@ -2104,6 +2453,8 @@ final class AppSyncService: ObservableObject {
             remoteSummary: remoteSummary,
             isSyncing: isSyncing,
             canApplyPulledContent: latestPulledPayload?.scope == relationship.contentScope,
+            hasPendingPulledContent: hasPendingPulledContent,
+            pendingPulledContentText: pendingPulledContentText,
             lastPushAt: lastPushAt,
             lastPullAt: lastPullAt,
             lastAppliedAt: lastAppliedAt,
@@ -2112,6 +2463,148 @@ final class AppSyncService: ObservableObject {
             summary: summary,
             detail: detail
         )
+    }
+
+    private func canAttemptAutomaticBackendSync(for preferredScope: AppContentScope) -> Bool {
+        guard sessionStore.state.sessionSource == .authenticated else {
+            return false
+        }
+
+        let relationshipState = relationshipStore.state
+        guard relationshipState.connectionMode == .backendRemote,
+              relationshipState.contentScope.isSharedSpace,
+              relationshipState.space != nil else {
+            return false
+        }
+
+        guard let account = sessionStore.state.account else {
+            return false
+        }
+
+        let accountId = account.accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard accountId.isEmpty == false else {
+            return false
+        }
+
+        let relationshipAccountId = relationshipState.currentAccountId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let relationshipAccountId,
+           relationshipAccountId.isEmpty == false,
+           relationshipAccountId != accountId {
+            return false
+        }
+
+        let resolvedScope = relationshipState.contentScope
+        return preferredScope == resolvedScope
+    }
+
+    private func shouldAutomaticallyApplyPulledContent(
+        _ payload: SyncContentPayload,
+        into scope: AppContentScope
+    ) -> Bool {
+        guard canAttemptAutomaticBackendSync(for: scope) else {
+            return false
+        }
+
+        guard payload.scope == relationshipStore.state.contentScope else {
+            return false
+        }
+
+        if let lastAppliedRemoteUpdatedAt,
+           payload.updatedAt <= lastAppliedRemoteUpdatedAt {
+            return false
+        }
+
+        let now = Date()
+        if let lastLocalSharedContentMutationAt,
+           now.timeIntervalSince(lastLocalSharedContentMutationAt) < automaticApplyLocalMutationCooldown {
+            return false
+        }
+
+        if let lastPushAt,
+           now.timeIntervalSince(lastPushAt) < automaticApplyRecentPushCooldown {
+            return false
+        }
+
+        if let suppressedUntil = automaticPushSuppressedUntil,
+           suppressedUntil > now {
+            return false
+        }
+
+        return true
+    }
+
+    private func notePendingPulledContentIfNeeded(
+        _ payload: SyncContentPayload,
+        trigger: AutomaticSyncTrigger
+    ) {
+        guard payload.scope == relationshipStore.state.contentScope else { return }
+        guard lastAppliedRemoteUpdatedAt.map({ payload.updatedAt > $0 }) ?? true else { return }
+        guard lastDeferredRemoteUpdatedAt.map({ payload.updatedAt > $0 }) ?? true else { return }
+
+        lastDeferredRemoteUpdatedAt = payload.updatedAt
+        latestErrorText = nil
+        switch trigger {
+        case .appBecameActive:
+            latestEventText = "回到前台后发现新的共享内容，可手动应用"
+        case .meViewAppeared:
+            latestEventText = "进入“我的”页时发现新的共享内容，可手动应用"
+        case .accountSyncAppeared:
+            latestEventText = "进入“账号与同步”页时发现新的共享内容，可手动应用"
+        case .wishesChanged, .weeklyTodosChanged, .currentStatusesChanged, .whisperNotesChanged:
+            latestEventText = "发现新的共享内容，可手动应用"
+        }
+        publishStatus()
+    }
+}
+private extension AppSyncService {
+    func automaticPushSignature(
+        memories: [MemoryTimelineEntry],
+        wishes: [PlaceWish],
+        anniversaries: [AnniversaryItem],
+        weeklyTodos: [WeeklyTodoItem],
+        currentStatuses: [CurrentStatusItem],
+        whisperNotes: [WhisperNoteItem],
+        scope: AppContentScope
+    ) -> String {
+        let memorySignature = memories
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)|\($0.photoFilename ?? "")" }
+            .joined(separator: ",")
+        let wishSignature = wishes
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)" }
+            .joined(separator: ",")
+        let anniversarySignature = anniversaries
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)" }
+            .joined(separator: ",")
+        let weeklyTodoSignature = weeklyTodos
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)|\($0.isCompleted)" }
+            .joined(separator: ",")
+        let currentStatusSignature = currentStatuses
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)|\($0.displayText)" }
+            .joined(separator: ",")
+        let whisperSignature = whisperNotes
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.createdAt.timeIntervalSince1970)|\($0.content)" }
+            .joined(separator: ",")
+
+        return [
+            scope.spaceId,
+            scope.currentUserId,
+            scope.partnerUserId ?? "",
+            scope.isSharedSpace ? "shared" : "local",
+            memorySignature,
+            wishSignature,
+            anniversarySignature,
+            weeklyTodoSignature,
+            currentStatusSignature,
+            whisperSignature
+        ].joined(separator: "#")
     }
 }
 
@@ -2122,6 +2615,7 @@ private struct StoredRemotePayload: Codable {
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
     let currentStatuses: [StoredRemoteCurrentStatus]
+    let whisperNotes: [StoredRemoteWhisperNote]
     let relationStatusRawValue: String
     let updatedAt: Date
 
@@ -2132,6 +2626,7 @@ private struct StoredRemotePayload: Codable {
         case anniversaries
         case weeklyTodos
         case currentStatuses
+        case whisperNotes
         case relationStatusRawValue
         case updatedAt
     }
@@ -2143,6 +2638,7 @@ private struct StoredRemotePayload: Codable {
         anniversaries = payload.anniversaries.map(StoredRemoteAnniversary.init)
         weeklyTodos = payload.weeklyTodos.map(StoredRemoteWeeklyTodo.init)
         currentStatuses = payload.currentStatuses.map(StoredRemoteCurrentStatus.init)
+        whisperNotes = payload.whisperNotes.map(StoredRemoteWhisperNote.init)
         relationStatusRawValue = payload.relationStatus.rawValue
         updatedAt = payload.updatedAt
     }
@@ -2155,6 +2651,7 @@ private struct StoredRemotePayload: Codable {
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
         currentStatuses = try container.decodeIfPresent([StoredRemoteCurrentStatus].self, forKey: .currentStatuses) ?? []
+        whisperNotes = try container.decodeIfPresent([StoredRemoteWhisperNote].self, forKey: .whisperNotes) ?? []
         relationStatusRawValue = try container.decode(String.self, forKey: .relationStatusRawValue)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
@@ -2168,6 +2665,7 @@ private struct StoredRemotePayload: Codable {
             anniversaryCount: anniversaries.count,
             weeklyTodoCount: weeklyTodos.count,
             currentStatusCount: currentStatuses.count,
+            whisperNoteCount: whisperNotes.count,
             updatedAt: updatedAt
         )
     }
@@ -2180,6 +2678,7 @@ private struct StoredRemotePayload: Codable {
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
             currentStatuses: currentStatuses.map(\.model),
+            whisperNotes: whisperNotes.map(\.model),
             relationStatus: CoupleRelationStatus(rawValue: relationStatusRawValue) ?? .unpaired,
             updatedAt: updatedAt
         )
@@ -2428,6 +2927,35 @@ private struct StoredRemoteCurrentStatus: Codable {
             effectiveScope: CurrentStatusEffectiveScope(rawValue: effectiveScopeRawValue) ?? .today,
             spaceId: spaceId,
             updatedAt: updatedAt
+        )
+    }
+}
+
+private struct StoredRemoteWhisperNote: Codable {
+    let id: UUID
+    let content: String
+    let createdAt: Date
+    let createdByUserId: String
+    let spaceId: String
+    let syncStatusRawValue: String
+
+    init(_ item: WhisperNoteItem) {
+        id = item.id
+        content = item.content
+        createdAt = item.createdAt
+        createdByUserId = item.createdByUserId
+        spaceId = item.spaceId
+        syncStatusRawValue = item.syncStatus.rawValue
+    }
+
+    var model: WhisperNoteItem {
+        WhisperNoteItem(
+            id: id,
+            content: content,
+            createdAt: createdAt,
+            createdByUserId: createdByUserId,
+            spaceId: spaceId,
+            syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
         )
     }
 }

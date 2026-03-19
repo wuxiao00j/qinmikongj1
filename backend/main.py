@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -18,6 +19,9 @@ from backend.config import settings
 from backend.db import Base, SessionLocal, get_db, get_engine
 from backend.models import Account, Space, SpaceMember, SpaceSnapshot
 from backend.seed import seed_database
+
+
+logger = logging.getLogger("backend.snapshot")
 
 
 @asynccontextmanager
@@ -200,6 +204,17 @@ class StoredRemoteCurrentStatusModel(BaseModel):
     updatedAt: datetime
 
 
+class StoredRemoteWhisperNoteModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    content: str
+    createdAt: datetime
+    createdByUserId: str
+    spaceId: str
+    syncStatusRawValue: str
+
+
 class StoredScopeModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -218,6 +233,7 @@ class StoredSnapshotRequestModel(BaseModel):
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
+    whisperNotes: list[StoredRemoteWhisperNoteModel] = Field(default_factory=list)
     relationStatusRawValue: str
     updatedAt: datetime
 
@@ -235,6 +251,7 @@ class RemoteSnapshotResponseModel(BaseModel):
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
+    whisperNotes: list[StoredRemoteWhisperNoteModel] = Field(default_factory=list)
     relationStatus: str
     updatedAt: datetime
 
@@ -248,6 +265,7 @@ class SnapshotRecordModel(BaseModel):
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     currentStatuses: list[StoredRemoteCurrentStatusModel] = Field(default_factory=list)
+    whisperNotes: list[StoredRemoteWhisperNoteModel] = Field(default_factory=list)
     relationStatus: str
     updatedAt: datetime
     lastUpdatedByAccountId: str | None = None
@@ -458,6 +476,7 @@ def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordMo
         anniversaries=[],
         weeklyTodos=[],
         currentStatuses=[],
+        whisperNotes=[],
         relationStatus="paired",
         updatedAt=utc_now(),
         lastUpdatedByAccountId=account.account_id,
@@ -472,6 +491,7 @@ def make_snapshot_record(space_id: str, account: Account, relation_status: str) 
         anniversaries=[],
         weeklyTodos=[],
         currentStatuses=[],
+        whisperNotes=[],
         relationStatus=relation_status,
         updatedAt=utc_now(),
         lastUpdatedByAccountId=account.account_id,
@@ -487,6 +507,12 @@ def get_snapshot_record(space: Space, account: Account) -> SnapshotRecordModel:
 
 def build_snapshot_response(session: Session, space: Space, account: Account) -> dict[str, Any]:
     snapshot = get_snapshot_record(space, account)
+    logger.info(
+        "snapshot GET response space=%s account=%s whisperNotes=%s",
+        space.space_id,
+        account.account_id,
+        len(snapshot.whisperNotes),
+    )
     return RemoteSnapshotResponseModel(
         snapshotId=snapshot.snapshotId,
         spaceId=space.space_id,
@@ -498,6 +524,7 @@ def build_snapshot_response(session: Session, space: Space, account: Account) ->
         anniversaries=snapshot.anniversaries,
         weeklyTodos=snapshot.weeklyTodos,
         currentStatuses=snapshot.currentStatuses,
+        whisperNotes=snapshot.whisperNotes,
         relationStatus=snapshot.relationStatus,
         updatedAt=snapshot.updatedAt,
     ).model_dump(mode="json")
@@ -523,6 +550,12 @@ def normalize_snapshot_payload(
                 code="invalid_payload",
                 message="payload 中的 currentUserId 与当前 token 不一致。",
             )
+        logger.info(
+            "snapshot PUT normalized stored payload space=%s account=%s whisperNotes=%s",
+            path_space_id,
+            account.account_id,
+            len(stored_payload.whisperNotes),
+        )
         return SnapshotRecordModel(
             snapshotId=f"snapshot-{path_space_id}-{uuid4().hex[:12]}",
             memories=stored_payload.memories,
@@ -530,6 +563,7 @@ def normalize_snapshot_payload(
             anniversaries=stored_payload.anniversaries,
             weeklyTodos=stored_payload.weeklyTodos,
             currentStatuses=stored_payload.currentStatuses,
+            whisperNotes=stored_payload.whisperNotes,
             relationStatus=stored_payload.relationStatusRawValue,
             updatedAt=utc_now(),
             lastUpdatedByAccountId=account.account_id,
@@ -559,6 +593,12 @@ def normalize_snapshot_payload(
                 code="invalid_payload",
                 message="payload 中的 partnerUserId 与当前空间不一致。",
             )
+        logger.info(
+            "snapshot PUT normalized remote payload space=%s account=%s whisperNotes=%s",
+            path_space_id,
+            account.account_id,
+            len(remote_payload.whisperNotes),
+        )
         return SnapshotRecordModel(
             snapshotId=f"snapshot-{path_space_id}-{uuid4().hex[:12]}",
             memories=remote_payload.memories,
@@ -566,6 +606,7 @@ def normalize_snapshot_payload(
             anniversaries=remote_payload.anniversaries,
             weeklyTodos=remote_payload.weeklyTodos,
             currentStatuses=remote_payload.currentStatuses,
+            whisperNotes=remote_payload.whisperNotes,
             relationStatus=remote_payload.relationStatus,
             updatedAt=utc_now(),
             lastUpdatedByAccountId=account.account_id,
@@ -597,6 +638,12 @@ def save_snapshot(session: Session, space: Space, snapshot_record: SnapshotRecor
         space.snapshot.payload_json = snapshot_record.model_dump(mode="json")
         space.snapshot.updated_by_account_id = snapshot_record.lastUpdatedByAccountId
         space.snapshot.updated_at = snapshot_record.updatedAt
+    logger.info(
+        "snapshot persisted space=%s updatedBy=%s whisperNotes=%s",
+        space.space_id,
+        snapshot_record.lastUpdatedByAccountId,
+        len(snapshot_record.whisperNotes),
+    )
     session.commit()
     session.refresh(space)
 

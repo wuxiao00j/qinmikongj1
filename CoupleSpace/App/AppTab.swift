@@ -811,9 +811,16 @@ final class WhisperNoteStore: ObservableObject {
     }
 
     func replaceItems(in scope: AppContentScope, with importedItems: [WhisperNoteItem]) {
+        let beforeMatchingCount = items.filter { $0.matches(scope: scope) }.count
         items.removeAll { $0.matches(scope: scope) }
         items.append(contentsOf: importedItems.map { $0.preparedForScopeReplacement(in: scope) })
         items.sort { $0.createdAt > $1.createdAt }
+        let afterMatchingCount = items.filter { $0.matches(scope: scope) }.count
+#if DEBUG
+        print(
+            "[WhisperSync] store replace space=\(scope.spaceId) imported=\(importedItems.count) beforeMatching=\(beforeMatchingCount) afterMatching=\(afterMatchingCount)"
+        )
+#endif
         save()
     }
 
