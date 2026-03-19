@@ -694,6 +694,55 @@ def filter_memories_by_tombstones(
     return [memory for memory in memories if memory.id not in deleted_ids]
 
 
+def merge_memory_snapshot_state(
+    existing_snapshot: SnapshotRecordModel | None,
+    incoming_snapshot: SnapshotRecordModel,
+) -> SnapshotRecordModel:
+    if existing_snapshot is None:
+        effective_memories = filter_memories_by_tombstones(
+            incoming_snapshot.memories,
+            incoming_snapshot.memoryTombstones,
+        )
+        return incoming_snapshot.model_copy(update={"memories": effective_memories})
+
+    merged_tombstones_by_id: dict[str, StoredRemoteMemoryTombstoneModel] = {
+        tombstone.id: tombstone for tombstone in existing_snapshot.memoryTombstones
+    }
+    for tombstone in incoming_snapshot.memoryTombstones:
+        existing_tombstone = merged_tombstones_by_id.get(tombstone.id)
+        if existing_tombstone is None or tombstone.deletedAt >= existing_tombstone.deletedAt:
+            merged_tombstones_by_id[tombstone.id] = tombstone
+
+    merged_memories_by_id: dict[str, StoredRemoteMemoryModel] = {
+        memory.id: memory for memory in existing_snapshot.memories
+    }
+    for memory in incoming_snapshot.memories:
+        existing_memory = merged_memories_by_id.get(memory.id)
+        if existing_memory is None or memory.updatedAt >= existing_memory.updatedAt:
+            merged_memories_by_id[memory.id] = memory
+
+    merged_tombstones = sorted(
+        merged_tombstones_by_id.values(),
+        key=lambda item: item.deletedAt,
+        reverse=True,
+    )
+    merged_memories = sorted(
+        filter_memories_by_tombstones(
+            list(merged_memories_by_id.values()),
+            merged_tombstones,
+        ),
+        key=lambda item: item.updatedAt,
+        reverse=True,
+    )
+
+    return incoming_snapshot.model_copy(
+        update={
+            "memories": merged_memories,
+            "memoryTombstones": merged_tombstones,
+        }
+    )
+
+
 def build_snapshot_response(session: Session, space: Space, account: Account) -> dict[str, Any]:
     snapshot = get_snapshot_record(space, account)
     effective_memories = filter_memories_by_tombstones(snapshot.memories, snapshot.memoryTombstones)
@@ -836,26 +885,35 @@ def normalize_snapshot_payload(
 
 
 def save_snapshot(session: Session, space: Space, snapshot_record: SnapshotRecordModel) -> None:
+    existing_snapshot = (
+        SnapshotRecordModel.model_validate(space.snapshot.payload_json)
+        if space.snapshot is not None
+        else None
+    )
+    merged_snapshot = merge_memory_snapshot_state(existing_snapshot, snapshot_record)
+
     if space.snapshot is None:
         session.add(
             SpaceSnapshot(
-                snapshot_id=snapshot_record.snapshotId,
+                snapshot_id=merged_snapshot.snapshotId,
                 space_id=space.space_id,
-                payload_json=snapshot_record.model_dump(mode="json"),
-                updated_by_account_id=snapshot_record.lastUpdatedByAccountId,
-                updated_at=snapshot_record.updatedAt,
+                payload_json=merged_snapshot.model_dump(mode="json"),
+                updated_by_account_id=merged_snapshot.lastUpdatedByAccountId,
+                updated_at=merged_snapshot.updatedAt,
             )
         )
     else:
-        space.snapshot.snapshot_id = snapshot_record.snapshotId
-        space.snapshot.payload_json = snapshot_record.model_dump(mode="json")
-        space.snapshot.updated_by_account_id = snapshot_record.lastUpdatedByAccountId
-        space.snapshot.updated_at = snapshot_record.updatedAt
+        space.snapshot.snapshot_id = merged_snapshot.snapshotId
+        space.snapshot.payload_json = merged_snapshot.model_dump(mode="json")
+        space.snapshot.updated_by_account_id = merged_snapshot.lastUpdatedByAccountId
+        space.snapshot.updated_at = merged_snapshot.updatedAt
     logger.info(
-        "snapshot persisted space=%s updatedBy=%s whisperNotes=%s",
+        "snapshot persisted space=%s updatedBy=%s memories=%s memory_tombstones=%s whisperNotes=%s",
         space.space_id,
-        snapshot_record.lastUpdatedByAccountId,
-        len(snapshot_record.whisperNotes),
+        merged_snapshot.lastUpdatedByAccountId,
+        len(merged_snapshot.memories),
+        len(merged_snapshot.memoryTombstones),
+        len(merged_snapshot.whisperNotes),
     )
     session.commit()
     session.refresh(space)
