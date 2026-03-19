@@ -160,6 +160,15 @@ class StoredRemoteMemoryModel(BaseModel):
     syncStatusRawValue: str
 
 
+class StoredRemoteMemoryTombstoneModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    spaceId: str
+    deletedByUserId: str
+    deletedAt: datetime
+
+
 class StoredRemoteWishModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -275,6 +284,7 @@ class StoredSnapshotRequestModel(BaseModel):
 
     scope: StoredScopeModel
     memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
+    memoryTombstones: list[StoredRemoteMemoryTombstoneModel] = Field(default_factory=list)
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
@@ -295,6 +305,7 @@ class RemoteSnapshotResponseModel(BaseModel):
     partnerUserId: str | None = None
     isSharedSpace: bool
     memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
+    memoryTombstones: list[StoredRemoteMemoryTombstoneModel] = Field(default_factory=list)
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
@@ -311,6 +322,7 @@ class SnapshotRecordModel(BaseModel):
 
     snapshotId: str
     memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
+    memoryTombstones: list[StoredRemoteMemoryTombstoneModel] = Field(default_factory=list)
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
@@ -633,6 +645,7 @@ def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordMo
     return SnapshotRecordModel(
         snapshotId=f"snapshot-{space_id}-{uuid4().hex[:12]}",
         memories=[],
+        memoryTombstones=[],
         wishes=[],
         anniversaries=[],
         weeklyTodos=[],
@@ -650,6 +663,7 @@ def make_snapshot_record(space_id: str, account: Account, relation_status: str) 
     return SnapshotRecordModel(
         snapshotId=f"snapshot-{space_id}-{uuid4().hex[:12]}",
         memories=[],
+        memoryTombstones=[],
         wishes=[],
         anniversaries=[],
         weeklyTodos=[],
@@ -670,12 +684,25 @@ def get_snapshot_record(space: Space, account: Account) -> SnapshotRecordModel:
     return SnapshotRecordModel.model_validate(space.snapshot.payload_json)
 
 
+def filter_memories_by_tombstones(
+    memories: list[StoredRemoteMemoryModel],
+    tombstones: list[StoredRemoteMemoryTombstoneModel],
+) -> list[StoredRemoteMemoryModel]:
+    deleted_ids = {tombstone.id for tombstone in tombstones}
+    if not deleted_ids:
+        return memories
+    return [memory for memory in memories if memory.id not in deleted_ids]
+
+
 def build_snapshot_response(session: Session, space: Space, account: Account) -> dict[str, Any]:
     snapshot = get_snapshot_record(space, account)
+    effective_memories = filter_memories_by_tombstones(snapshot.memories, snapshot.memoryTombstones)
     logger.info(
-        "snapshot GET response space=%s account=%s whisperNotes=%s",
+        "snapshot GET response space=%s account=%s memories=%s memory_tombstones=%s whisperNotes=%s",
         space.space_id,
         account.account_id,
+        len(effective_memories),
+        len(snapshot.memoryTombstones),
         len(snapshot.whisperNotes),
     )
     return RemoteSnapshotResponseModel(
@@ -684,7 +711,8 @@ def build_snapshot_response(session: Session, space: Space, account: Account) ->
         currentUserId=account.current_user_id,
         partnerUserId=resolve_partner_user_id(session, space, account),
         isSharedSpace=len(space.members) > 1,
-        memories=snapshot.memories,
+        memories=effective_memories,
+        memoryTombstones=snapshot.memoryTombstones,
         wishes=snapshot.wishes,
         anniversaries=snapshot.anniversaries,
         weeklyTodos=snapshot.weeklyTodos,
@@ -718,14 +746,21 @@ def normalize_snapshot_payload(
                 message="payload 中的 currentUserId 与当前 token 不一致。",
             )
         logger.info(
-            "snapshot PUT normalized stored payload space=%s account=%s whisperNotes=%s",
+            "snapshot PUT normalized stored payload space=%s account=%s memories=%s memory_tombstones=%s whisperNotes=%s",
             path_space_id,
             account.account_id,
+            len(stored_payload.memories),
+            len(stored_payload.memoryTombstones),
             len(stored_payload.whisperNotes),
+        )
+        effective_memories = filter_memories_by_tombstones(
+            stored_payload.memories,
+            stored_payload.memoryTombstones,
         )
         return SnapshotRecordModel(
             snapshotId=f"snapshot-{path_space_id}-{uuid4().hex[:12]}",
-            memories=stored_payload.memories,
+            memories=effective_memories,
+            memoryTombstones=stored_payload.memoryTombstones,
             wishes=stored_payload.wishes,
             anniversaries=stored_payload.anniversaries,
             weeklyTodos=stored_payload.weeklyTodos,
@@ -763,14 +798,21 @@ def normalize_snapshot_payload(
                 message="payload 中的 partnerUserId 与当前空间不一致。",
             )
         logger.info(
-            "snapshot PUT normalized remote payload space=%s account=%s whisperNotes=%s",
+            "snapshot PUT normalized remote payload space=%s account=%s memories=%s memory_tombstones=%s whisperNotes=%s",
             path_space_id,
             account.account_id,
+            len(remote_payload.memories),
+            len(remote_payload.memoryTombstones),
             len(remote_payload.whisperNotes),
+        )
+        effective_memories = filter_memories_by_tombstones(
+            remote_payload.memories,
+            remote_payload.memoryTombstones,
         )
         return SnapshotRecordModel(
             snapshotId=f"snapshot-{path_space_id}-{uuid4().hex[:12]}",
-            memories=remote_payload.memories,
+            memories=effective_memories,
+            memoryTombstones=remote_payload.memoryTombstones,
             wishes=remote_payload.wishes,
             anniversaries=remote_payload.anniversaries,
             weeklyTodos=remote_payload.weeklyTodos,

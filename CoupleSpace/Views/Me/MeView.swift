@@ -559,6 +559,7 @@ private struct AccountSyncStatusView: View {
     private var heroCard: some View {
         let snapshot = syncService.buildSnapshot(
             memories: memoryStore.entries(in: contentScope),
+            memoryTombstones: memoryStore.deletionTombstones(in: contentScope),
             wishes: wishStore.wishes(in: contentScope),
             anniversaries: anniversaryStore.anniversaries(in: contentScope),
             weeklyTodos: weeklyTodoItems,
@@ -1019,6 +1020,7 @@ private struct AccountSyncStatusView: View {
                     Task {
                         await syncService.pushCurrentScopeContentToLocalBackend(
                             memories: memoryStore.entries(in: contentScope),
+                            memoryTombstones: memoryStore.deletionTombstones(in: contentScope),
                             wishes: wishStore.wishes(in: contentScope),
                             anniversaries: anniversaryStore.anniversaries(in: contentScope),
                             weeklyTodoStore: weeklyTodoStore,
@@ -1441,6 +1443,7 @@ private enum AccountSyncRehearsalFixtures {
             partnerUserId: scope.partnerUserId,
             isSharedSpace: scope.isSharedSpace,
             memories: merging(rehearsalMemory, into: markAsSynced(memories, updatedAt: now)),
+            memoryTombstones: [],
             wishes: merging(rehearsalWish, into: markAsSynced(wishes, updatedAt: now)),
             anniversaries: merging(rehearsalAnniversary, into: markAsSynced(anniversaries, updatedAt: now)),
             weeklyTodos: merging(rehearsalWeeklyTodo, into: markAsSynced(weeklyTodos, updatedAt: now)),

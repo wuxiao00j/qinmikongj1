@@ -71,6 +71,20 @@ struct AppRootView: View {
             refreshWidgetSnapshots()
             Task {
                 await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
+                let resumedPendingPush = syncService.resumePendingAutomaticPushIfPossible(
+                    memories: memoryStore.entries(in: relationshipStore.contentScope),
+                    memoryTombstones: memoryStore.deletionTombstones(in: relationshipStore.contentScope),
+                    wishes: wishStore.wishes(in: relationshipStore.contentScope),
+                    anniversaries: anniversaryStore.anniversaries(in: relationshipStore.contentScope),
+                    weeklyTodos: weeklyTodoStore.items(in: relationshipStore.contentScope),
+                    tonightDinners: tonightDinnerStore.items(in: relationshipStore.contentScope),
+                    rituals: ritualStore.items(in: relationshipStore.contentScope),
+                    currentStatuses: currentStatusStore.items(in: relationshipStore.contentScope),
+                    whisperNotes: whisperNoteStore.items(in: relationshipStore.contentScope),
+                    scope: relationshipStore.contentScope,
+                    trigger: .appBecameActive
+                )
+                guard resumedPendingPush == false else { return }
                 syncService.scheduleAutomaticPullIfPossible(
                     scope: relationshipStore.contentScope,
                     memoryStore: memoryStore,
@@ -93,6 +107,12 @@ struct AppRootView: View {
         }
         .onReceive(memoryStore.$entries) { _ in
             refreshMemoryWidgetSnapshot()
+        }
+        .onReceive(memoryStore.$entries.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .memoriesChanged)
+        }
+        .onReceive(memoryStore.$deletionTombstones.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .memoriesChanged)
         }
         .onReceive(wishStore.$wishes.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .wishesChanged)
@@ -156,6 +176,7 @@ struct AppRootView: View {
         let scope = relationshipStore.contentScope
         syncService.scheduleAutomaticPushIfPossible(
             memories: memoryStore.entries(in: scope),
+            memoryTombstones: memoryStore.deletionTombstones(in: scope),
             wishes: wishStore.wishes(in: scope),
             anniversaries: anniversaryStore.anniversaries(in: scope),
             weeklyTodos: weeklyTodoStore.items(in: scope),

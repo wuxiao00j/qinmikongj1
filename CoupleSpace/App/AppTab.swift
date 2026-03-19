@@ -38,9 +38,11 @@ final class AppNavigationState: ObservableObject {
 @MainActor
 final class MemoryStore: ObservableObject {
     @Published private(set) var entries: [MemoryTimelineEntry] = []
+    @Published private(set) var deletionTombstones: [MemoryDeletionTombstone] = []
 
     private let defaults: UserDefaults
     private let storageKey = "com.barry.CoupleSpace.memoryEntries"
+    private let deletionStorageKey = "com.barry.CoupleSpace.memoryDeletionTombstones"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -48,13 +50,20 @@ final class MemoryStore: ObservableObject {
     }
 
     var hasPersistedEntries: Bool {
-        !entries.isEmpty
+        !entries.isEmpty || !deletionTombstones.isEmpty
     }
 
     func entries(in scope: AppContentScope) -> [MemoryTimelineEntry] {
-        entries
-            .filter { $0.matches(scope: scope) }
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        return entries
+            .filter { $0.matches(scope: scope) && deletedIDs.contains($0.id) == false }
             .sorted { $0.date > $1.date }
+    }
+
+    func deletionTombstones(in scope: AppContentScope) -> [MemoryDeletionTombstone] {
+        deletionTombstones
+            .filter { $0.matches(scope: scope) }
+            .sorted { $0.deletedAt > $1.deletedAt }
     }
 
     func add(_ entry: MemoryTimelineEntry, in scope: AppContentScope) {
@@ -98,11 +107,20 @@ final class MemoryStore: ObservableObject {
         }
 
         entries.removeAll { $0.id == entryID && $0.matches(scope: scope) }
+        upsertDeletionTombstone(
+            MemoryDeletionTombstone(
+                id: entryID,
+                spaceId: scope.spaceId,
+                deletedByUserId: scope.currentUserId
+            ),
+            in: scope
+        )
         MemoryPhotoStorage.deleteImage(for: existingEntry.photoFilename)
         save()
     }
 
     func replaceEntries(in scope: AppContentScope, with importedEntries: [MemoryTimelineEntry]) {
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
         let existingEntriesByID = Dictionary(
             uniqueKeysWithValues: entries
                 .filter { $0.matches(scope: scope) }
@@ -110,7 +128,7 @@ final class MemoryStore: ObservableObject {
         )
         entries.removeAll { $0.matches(scope: scope) }
         entries.append(
-            contentsOf: importedEntries.map {
+            contentsOf: importedEntries.filter { deletedIDs.contains($0.id) == false }.map {
                 $0.preparedForScopeReplacement(
                     in: scope,
                     preservingLocalImageMetadataFrom: existingEntriesByID[$0.id]
@@ -119,6 +137,39 @@ final class MemoryStore: ObservableObject {
         )
         entries.sort { $0.date > $1.date }
         save()
+    }
+
+    @discardableResult
+    func mergeDeletionTombstones(
+        in scope: AppContentScope,
+        with importedTombstones: [MemoryDeletionTombstone]
+    ) -> [MemoryDeletionTombstone] {
+        let keptTombstones = deletionTombstones.filter { !$0.matches(scope: scope) }
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: deletionTombstones(in: scope).map { ($0.id, $0) }
+        )
+
+        for tombstone in importedTombstones {
+            guard tombstone.matches(scope: scope) else { continue }
+            if let existing = mergedByID[tombstone.id], existing.deletedAt >= tombstone.deletedAt {
+                continue
+            }
+            mergedByID[tombstone.id] = tombstone.preparedForScopeReplacement(in: scope)
+        }
+
+        let mergedTombstones = mergedByID.values.sorted { $0.deletedAt > $1.deletedAt }
+        deletionTombstones = keptTombstones + mergedTombstones
+
+        let deletedIDs = Set(mergedTombstones.map(\.id))
+        let removedEntries = entries.filter { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
+        if removedEntries.isEmpty == false {
+            removedEntries.forEach { MemoryPhotoStorage.deleteImage(for: $0.photoFilename) }
+            entries.removeAll { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
+            entries.sort { $0.date > $1.date }
+        }
+
+        save()
+        return mergedTombstones
     }
 
     func setRemoteAssetID(_ remoteAssetID: String?, for entryID: UUID, in scope: AppContentScope) {
@@ -156,6 +207,7 @@ final class MemoryStore: ObservableObject {
     private func load() {
         guard let data = defaults.data(forKey: storageKey) else {
             entries = []
+            loadDeletionTombstones()
             return
         }
 
@@ -169,6 +221,8 @@ final class MemoryStore: ObservableObject {
         } catch {
             entries = []
         }
+
+        loadDeletionTombstones()
     }
 
     private func save() {
@@ -177,9 +231,44 @@ final class MemoryStore: ObservableObject {
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(entries.map { StoredMemoryEntry(entry: $0) })
             defaults.set(data, forKey: storageKey)
+            let tombstoneData = try encoder.encode(
+                deletionTombstones.map { StoredMemoryDeletionTombstone(tombstone: $0) }
+            )
+            defaults.set(tombstoneData, forKey: deletionStorageKey)
         } catch {
-            assertionFailure("Failed to save memory entries: \(error)")
+            assertionFailure("Failed to save memory state: \(error)")
         }
+    }
+
+    private func loadDeletionTombstones() {
+        guard let data = defaults.data(forKey: deletionStorageKey) else {
+            deletionTombstones = []
+            return
+        }
+
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let storedTombstones = try decoder.decode([StoredMemoryDeletionTombstone].self, from: data)
+            deletionTombstones = storedTombstones
+                .map(\.model)
+                .sorted { $0.deletedAt > $1.deletedAt }
+        } catch {
+            deletionTombstones = []
+        }
+    }
+
+    private func upsertDeletionTombstone(_ tombstone: MemoryDeletionTombstone, in scope: AppContentScope) {
+        let preparedTombstone = tombstone.preparedForScopeReplacement(in: scope)
+        if let index = deletionTombstones.firstIndex(where: { $0.id == preparedTombstone.id && $0.matches(scope: scope) }) {
+            if deletionTombstones[index].deletedAt >= preparedTombstone.deletedAt {
+                return
+            }
+            deletionTombstones[index] = preparedTombstone
+        } else {
+            deletionTombstones.append(preparedTombstone)
+        }
+        deletionTombstones.sort { $0.deletedAt > $1.deletedAt }
     }
 }
 
@@ -959,6 +1048,29 @@ private struct StoredMemoryEntry: Codable {
     }
 }
 
+private struct StoredMemoryDeletionTombstone: Codable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(tombstone: MemoryDeletionTombstone) {
+        id = tombstone.id
+        spaceId = tombstone.spaceId
+        deletedByUserId = tombstone.deletedByUserId
+        deletedAt = tombstone.deletedAt
+    }
+
+    var model: MemoryDeletionTombstone {
+        MemoryDeletionTombstone(
+            id: id,
+            spaceId: spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
+        )
+    }
+}
+
 enum MemoryPhotoStorageError: LocalizedError {
     case invalidImageData
     case inaccessibleStorageDirectory
@@ -978,6 +1090,9 @@ enum MemoryPhotoStorageError: LocalizedError {
 
 enum MemoryPhotoStorage {
     private static let folderName = "MemoryPhotos"
+    private static let uploadTargetMaxBytes = 850_000
+    private static let uploadCompressionQualities: [CGFloat] = [0.82, 0.72, 0.62, 0.52, 0.42, 0.32]
+    private static let uploadMaxPixelLengths: [CGFloat] = [1600, 1280, 1080, 960, 820]
 
     static func saveImageData(_ data: Data, for entryID: UUID) throws -> String {
         guard let image = UIImage(data: data) else {
@@ -1011,6 +1126,28 @@ enum MemoryPhotoStorage {
         return try? Data(contentsOf: url)
     }
 
+    static func uploadImageData(for filename: String?, maxBytes: Int = uploadTargetMaxBytes) -> Data? {
+        guard let originalData = imageData(for: filename) else { return nil }
+        if originalData.count <= maxBytes {
+            return originalData
+        }
+
+        guard let image = uiImage(for: filename) else { return originalData }
+
+        for pixelLength in uploadMaxPixelLengths {
+            let resizedImage = resizedImageIfNeeded(image, maxPixelLength: pixelLength)
+            for quality in uploadCompressionQualities {
+                guard let candidateData = resizedImage.jpegData(compressionQuality: quality) else { continue }
+                if candidateData.count <= maxBytes {
+                    return candidateData
+                }
+            }
+        }
+
+        return resizedImageIfNeeded(image, maxPixelLength: uploadMaxPixelLengths.last ?? 820)
+            .jpegData(compressionQuality: uploadCompressionQualities.last ?? 0.32)
+    }
+
     static func uiImage(for filename: String?) -> UIImage? {
         guard let url = imageURL(for: filename) else { return nil }
         return UIImage(contentsOfFile: url.path)
@@ -1033,6 +1170,21 @@ enum MemoryPhotoStorage {
             return directoryURL
         } catch {
             throw MemoryPhotoStorageError.inaccessibleStorageDirectory
+        }
+    }
+
+    private static func resizedImageIfNeeded(_ image: UIImage, maxPixelLength: CGFloat) -> UIImage {
+        let largestSide = max(image.size.width, image.size.height)
+        guard largestSide > maxPixelLength, largestSide > 0 else { return image }
+
+        let scale = maxPixelLength / largestSide
+        let targetSize = CGSize(
+            width: max(image.size.width * scale, 1),
+            height: max(image.size.height * scale, 1)
+        )
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
     }
 }
@@ -1432,6 +1584,21 @@ private extension MemoryTimelineEntry {
             createdAt: createdAt,
             updatedAt: .now,
             syncStatus: nextSyncStatus
+        )
+    }
+}
+
+private extension MemoryDeletionTombstone {
+    func matches(scope: AppContentScope) -> Bool {
+        spaceId == scope.spaceId || (scope.isSharedSpace && spaceId == AppDataDefaults.localSpaceId)
+    }
+
+    func preparedForScopeReplacement(in scope: AppContentScope) -> MemoryDeletionTombstone {
+        MemoryDeletionTombstone(
+            id: id,
+            spaceId: scope.spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
         )
     }
 }

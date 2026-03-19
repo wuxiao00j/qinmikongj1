@@ -1029,6 +1029,25 @@ struct MemoryTimelineEntry: Identifiable {
     }()
 }
 
+struct MemoryDeletionTombstone: Identifiable, Equatable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(
+        id: UUID,
+        spaceId: String,
+        deletedByUserId: String,
+        deletedAt: Date = .now
+    ) {
+        self.id = id
+        self.spaceId = spaceId
+        self.deletedByUserId = deletedByUserId
+        self.deletedAt = deletedAt
+    }
+}
+
 struct MemoryMetaItem: Identifiable {
     let id = UUID()
     let text: String
