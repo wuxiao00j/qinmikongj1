@@ -867,6 +867,7 @@ struct MemoryTimelineEntry: Identifiable {
     let category: MemoryCategory
     let imageLabel: String
     let photoFilename: String?
+    let remoteAssetID: String?
     let mood: String
     let location: String
     let weather: String
@@ -885,6 +886,7 @@ struct MemoryTimelineEntry: Identifiable {
         category: MemoryCategory,
         imageLabel: String,
         photoFilename: String? = nil,
+        remoteAssetID: String? = nil,
         mood: String = "",
         location: String = "",
         weather: String = "",
@@ -902,6 +904,7 @@ struct MemoryTimelineEntry: Identifiable {
         self.category = category
         self.imageLabel = imageLabel
         self.photoFilename = photoFilename
+        self.remoteAssetID = remoteAssetID
         self.mood = mood
         self.location = location
         self.weather = weather
@@ -921,6 +924,7 @@ struct MemoryTimelineEntry: Identifiable {
         category: MemoryCategory,
         imageLabel: String,
         photoFilename: String? = nil,
+        remoteAssetID: String? = nil,
         mood: String = "",
         location: String = "",
         weather: String = "",
@@ -939,6 +943,7 @@ struct MemoryTimelineEntry: Identifiable {
             category: category,
             imageLabel: imageLabel,
             photoFilename: photoFilename,
+            remoteAssetID: remoteAssetID,
             mood: mood,
             location: location,
             weather: weather,

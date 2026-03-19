@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -17,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.auth import verify_password
 from backend.config import settings
 from backend.db import Base, SessionLocal, get_db, get_engine
-from backend.models import Account, Space, SpaceMember, SpaceSnapshot
+from backend.models import Account, MemoryAsset, Space, SpaceMember, SpaceSnapshot
 from backend.seed import seed_database
 
 
@@ -121,6 +123,20 @@ class SpaceStatusResponse(BaseModel):
     partnerUserId: str | None = None
     currentAccount: SpaceParticipantSummary
     partner: SpaceParticipantSummary | None = None
+
+
+class MemoryAssetUploadResponse(BaseModel):
+    assetId: str
+    memoryId: str
+    spaceId: str
+    storageKey: str
+    mimeType: str
+    byteSize: int
+    checksum: str | None = None
+    width: int | None = None
+    height: int | None = None
+    createdAt: datetime
+    uploadedByUserId: str
 
 
 class StoredRemoteMemoryModel(BaseModel):
@@ -503,6 +519,44 @@ def resolve_partner_user_id(session: Session, space: Space, account: Account) ->
     return account.partner_user_id
 
 
+def resolve_memory_asset_extension(mime_type: str) -> str:
+    normalized = mime_type.strip().lower()
+    mapping = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/heic": ".heic",
+        "image/heif": ".heif",
+        "image/webp": ".webp",
+    }
+    extension = mapping.get(normalized)
+    if extension is None:
+        raise APIError(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="unsupported_mime_type",
+            message="当前只支持常见图片格式上传。",
+            detail={"mimeType": mime_type},
+        )
+    return extension
+
+
+def memory_asset_storage_root() -> Path:
+    root = Path(settings.memory_asset_storage_dir).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def build_memory_asset_storage_key(space_id: str, asset_id: str, extension: str) -> str:
+    return f"spaces/{space_id}/memory-assets/{asset_id}{extension}"
+
+
+def write_memory_asset_file(storage_key: str, body: bytes) -> Path:
+    destination = memory_asset_storage_root() / storage_key
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(body)
+    return destination
+
+
 def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordModel:
     return SnapshotRecordModel(
         snapshotId=f"snapshot-{space_id}-{uuid4().hex[:12]}",
@@ -811,6 +865,22 @@ def build_space_status_response(session: Session, space: Space, account: Account
     )
 
 
+def build_memory_asset_upload_response(asset: MemoryAsset) -> MemoryAssetUploadResponse:
+    return MemoryAssetUploadResponse(
+        assetId=asset.asset_id,
+        memoryId=asset.memory_id,
+        spaceId=asset.space_id,
+        storageKey=asset.storage_key,
+        mimeType=asset.mime_type,
+        byteSize=asset.byte_size,
+        checksum=asset.checksum,
+        width=asset.width,
+        height=asset.height,
+        createdAt=asset.created_at,
+        uploadedByUserId=asset.uploaded_by_user_id,
+    )
+
+
 def initialize_space_snapshot(session: Session, space: Space, account: Account) -> None:
     snapshot_record = make_snapshot_record(
         space_id=space.space_id,
@@ -1000,6 +1070,94 @@ async def get_space_status(
     )
     space = ensure_space_access(db, space_id, account)
     return build_space_status_response(db, space, account)
+
+
+@app.post(
+    "/spaces/{space_id}/memory-assets",
+    response_model=MemoryAssetUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_memory_asset(
+    space_id: str,
+    memoryId: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_couple_space_account_id: str | None = Header(default=None, alias="X-CoupleSpace-Account-ID"),
+    x_couple_space_session_account_id: str | None = Header(default=None, alias="X-CoupleSpace-Session-Account-ID"),
+    db: Session = Depends(get_db),
+) -> MemoryAssetUploadResponse:
+    account = require_account(
+        session=db,
+        authorization=authorization,
+        account_id_header=x_couple_space_account_id,
+        session_account_id_header=x_couple_space_session_account_id,
+    )
+    ensure_space_access(db, space_id, account)
+
+    normalized_memory_id = memoryId.strip()
+    if not normalized_memory_id:
+        raise APIError(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="invalid_memory_id",
+            message="memoryId 不能为空。",
+        )
+
+    mime_type = request.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    if not mime_type:
+        raise APIError(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="missing_content_type",
+            message="图片上传请求缺少 Content-Type。",
+        )
+
+    extension = resolve_memory_asset_extension(mime_type)
+    body = await request.body()
+    if not body:
+        raise APIError(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="empty_upload_body",
+            message="图片上传内容不能为空。",
+        )
+
+    if len(body) > settings.memory_asset_max_bytes:
+        raise APIError(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            code="memory_asset_too_large",
+            message="图片暂时超过当前测试环境允许的大小。",
+            detail={"maxBytes": settings.memory_asset_max_bytes},
+        )
+
+    asset_id = f"asset-{uuid4().hex[:24]}"
+    storage_key = build_memory_asset_storage_key(space_id, asset_id, extension)
+    checksum = hashlib.sha256(body).hexdigest()
+    write_memory_asset_file(storage_key, body)
+
+    asset = MemoryAsset(
+        asset_id=asset_id,
+        memory_id=normalized_memory_id,
+        space_id=space_id,
+        storage_key=storage_key,
+        mime_type=mime_type,
+        byte_size=len(body),
+        checksum=checksum,
+        width=None,
+        height=None,
+        uploaded_by_account_id=account.account_id,
+        uploaded_by_user_id=account.current_user_id,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+
+    logger.info(
+        "memory asset uploaded space=%s memory=%s asset=%s bytes=%s",
+        space_id,
+        normalized_memory_id,
+        asset_id,
+        len(body),
+    )
+
+    return build_memory_asset_upload_response(asset)
 
 
 @app.get("/spaces/{space_id}/snapshot", response_model=RemoteSnapshotResponseModel)

@@ -3,6 +3,7 @@ import SwiftUI
 struct MemoryView: View {
     @EnvironmentObject private var memoryStore: MemoryStore
     @EnvironmentObject private var relationshipStore: RelationshipStore
+    @EnvironmentObject private var syncService: AppSyncService
     @State private var isPresentingAddSheet = false
     @State private var editingEntry: MemoryTimelineEntry?
     @State private var pendingDeleteEntry: MemoryTimelineEntry?
@@ -109,6 +110,16 @@ struct MemoryView: View {
                         withAnimation(.snappy(duration: 0.28)) {
                             memoryStore.add(newEntry, in: contentScope)
                             scrollTargetID = newEntry.id
+                        }
+                        if let savedEntry = memoryStore.entries(in: contentScope).first(where: { $0.id == newEntry.id }),
+                           savedEntry.photoFilename != nil {
+                            Task {
+                                await syncService.uploadMemoryPhotoIfPossible(
+                                    for: savedEntry,
+                                    scope: contentScope,
+                                    memoryStore: memoryStore
+                                )
+                            }
                         }
                     }
                 }

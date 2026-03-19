@@ -112,3 +112,25 @@ class SpaceSnapshot(Base):
         back_populates="updated_snapshots",
         foreign_keys=[updated_by_account_id],
     )
+
+
+class MemoryAsset(Base):
+    __tablename__ = "memory_assets"
+    __table_args__ = (UniqueConstraint("asset_id", name="uq_memory_asset_asset_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    memory_id: Mapped[str] = mapped_column(String(128), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("spaces.space_id", ondelete="CASCADE"), index=True)
+    storage_key: Mapped[str] = mapped_column(String(512), unique=True)
+    mime_type: Mapped[str] = mapped_column(String(128))
+    byte_size: Mapped[int] = mapped_column()
+    checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    width: Mapped[int | None] = mapped_column(nullable=True)
+    height: Mapped[int | None] = mapped_column(nullable=True)
+    uploaded_by_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.account_id"),
+        nullable=True,
+    )
+    uploaded_by_user_id: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

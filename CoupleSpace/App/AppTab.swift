@@ -103,9 +103,53 @@ final class MemoryStore: ObservableObject {
     }
 
     func replaceEntries(in scope: AppContentScope, with importedEntries: [MemoryTimelineEntry]) {
+        let existingEntriesByID = Dictionary(
+            uniqueKeysWithValues: entries
+                .filter { $0.matches(scope: scope) }
+                .map { ($0.id, $0) }
+        )
         entries.removeAll { $0.matches(scope: scope) }
-        entries.append(contentsOf: importedEntries.map { $0.preparedForScopeReplacement(in: scope) })
+        entries.append(
+            contentsOf: importedEntries.map {
+                $0.preparedForScopeReplacement(
+                    in: scope,
+                    preservingLocalImageMetadataFrom: existingEntriesByID[$0.id]
+                )
+            }
+        )
         entries.sort { $0.date > $1.date }
+        save()
+    }
+
+    func setRemoteAssetID(_ remoteAssetID: String?, for entryID: UUID, in scope: AppContentScope) {
+        guard let index = entries.firstIndex(where: { $0.id == entryID && $0.matches(scope: scope) }) else {
+            return
+        }
+
+        let normalizedRemoteAssetID = remoteAssetID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedRemoteAssetID = normalizedRemoteAssetID?.isEmpty == false ? normalizedRemoteAssetID : nil
+        guard entries[index].remoteAssetID != resolvedRemoteAssetID else { return }
+
+        let entry = entries[index]
+        entries[index] = MemoryTimelineEntry(
+            id: entry.id,
+            title: entry.title,
+            body: entry.body,
+            date: entry.date,
+            category: entry.category,
+            imageLabel: entry.imageLabel,
+            photoFilename: entry.photoFilename,
+            remoteAssetID: resolvedRemoteAssetID,
+            mood: entry.mood,
+            location: entry.location,
+            weather: entry.weather,
+            isFeatured: entry.isFeatured,
+            spaceId: entry.spaceId,
+            createdByUserId: entry.createdByUserId,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+            syncStatus: entry.syncStatus
+        )
         save()
     }
 
@@ -860,6 +904,7 @@ private struct StoredMemoryEntry: Codable {
     let categoryRawValue: String
     let imageLabel: String
     let photoFilename: String?
+    let remoteAssetID: String?
     let mood: String
     let location: String
     let weather: String
@@ -878,6 +923,7 @@ private struct StoredMemoryEntry: Codable {
         categoryRawValue = entry.category.rawValue
         imageLabel = entry.imageLabel
         photoFilename = entry.photoFilename
+        remoteAssetID = entry.remoteAssetID
         mood = entry.mood
         location = entry.location
         weather = entry.weather
@@ -899,6 +945,7 @@ private struct StoredMemoryEntry: Codable {
             category: MemoryCategory(rawValue: categoryRawValue) ?? .daily,
             imageLabel: imageLabel,
             photoFilename: photoFilename,
+            remoteAssetID: remoteAssetID,
             mood: mood,
             location: location,
             weather: weather,
@@ -1283,6 +1330,7 @@ private extension MemoryTimelineEntry {
             category: category,
             imageLabel: imageLabel,
             photoFilename: photoFilename,
+            remoteAssetID: remoteAssetID,
             mood: mood,
             location: location,
             weather: weather,
@@ -1304,6 +1352,7 @@ private extension MemoryTimelineEntry {
             category: category,
             imageLabel: imageLabel,
             photoFilename: photoFilename,
+            remoteAssetID: remoteAssetID,
             mood: mood,
             location: location,
             weather: weather,
@@ -1316,7 +1365,12 @@ private extension MemoryTimelineEntry {
         )
     }
 
-    func preparedForScopeReplacement(in scope: AppContentScope) -> MemoryTimelineEntry {
+    func preparedForScopeReplacement(
+        in scope: AppContentScope,
+        preservingLocalImageMetadataFrom existingEntry: MemoryTimelineEntry? = nil
+    ) -> MemoryTimelineEntry {
+        let resolvedPhotoFilename = photoFilename ?? existingEntry?.photoFilename
+        let resolvedRemoteAssetID = remoteAssetID ?? existingEntry?.remoteAssetID
         return MemoryTimelineEntry(
             id: id,
             title: title,
@@ -1324,7 +1378,8 @@ private extension MemoryTimelineEntry {
             date: date,
             category: category,
             imageLabel: imageLabel,
-            photoFilename: photoFilename,
+            photoFilename: resolvedPhotoFilename,
+            remoteAssetID: resolvedRemoteAssetID,
             mood: mood,
             location: location,
             weather: weather,
@@ -1367,6 +1422,7 @@ private extension MemoryTimelineEntry {
             category: category,
             imageLabel: imageLabel,
             photoFilename: photoFilename,
+            remoteAssetID: photoFilename == self.photoFilename ? remoteAssetID : nil,
             mood: mood.trimmingCharacters(in: .whitespacesAndNewlines),
             location: location.trimmingCharacters(in: .whitespacesAndNewlines),
             weather: weather.trimmingCharacters(in: .whitespacesAndNewlines),

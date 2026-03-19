@@ -509,6 +509,7 @@ struct SyncRemotePayloadSummary: Equatable {
 }
 
 enum AutomaticSyncTrigger: String {
+    case memoriesChanged
     case wishesChanged
     case weeklyTodosChanged
     case tonightDinnersChanged
@@ -521,6 +522,8 @@ enum AutomaticSyncTrigger: String {
 
     var automaticPushEventText: String {
         switch self {
+        case .memoriesChanged:
+            return "已自动同步最新记忆到测试环境"
         case .wishesChanged:
             return "已自动同步最新愿望改动到测试环境"
         case .weeklyTodosChanged:
@@ -546,7 +549,7 @@ enum AutomaticSyncTrigger: String {
             return "已在进入“我的”页时检查最近云端快照"
         case .accountSyncAppeared:
             return "已在进入“账号与同步”页时检查最近云端快照"
-        case .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
+        case .memoriesChanged, .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
             return "已检查最近云端快照"
         }
     }
@@ -1056,25 +1059,45 @@ private struct RealSyncRemoteRequestBuilder {
         authorization: RealSyncRemoteAuthorization?,
         body: Data? = nil
     ) throws -> URLRequest {
+        try makeRequest(
+            method: endpoint.method,
+            pathComponents: endpoint.pathComponents(for: context),
+            queryItems: endpoint.queryItems(for: context),
+            context: context,
+            authorization: authorization,
+            body: body,
+            contentType: body == nil ? nil : "application/json"
+        )
+    }
+
+    func makeRequest(
+        method: RealSyncRemoteHTTPMethod,
+        pathComponents: [String],
+        queryItems: [URLQueryItem],
+        context: AppSyncRequestContext,
+        authorization: RealSyncRemoteAuthorization?,
+        body: Data? = nil,
+        contentType: String? = nil
+    ) throws -> URLRequest {
         guard let baseURL = configuration.baseURL else {
             throw RealSyncRemoteProviderError.baseURLMissing
         }
 
         var url = baseURL
-        for component in endpoint.pathComponents(for: context) {
+        for component in pathComponents {
             url.appendPathComponent(component)
         }
 
-        if endpoint.queryItems(for: context).isEmpty == false,
+        if queryItems.isEmpty == false,
            var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            components.queryItems = endpoint.queryItems(for: context)
+            components.queryItems = queryItems
             if let resolvedURL = components.url {
                 url = resolvedURL
             }
         }
 
         var request = URLRequest(url: url, timeoutInterval: configuration.timeoutInterval)
-        request.httpMethod = endpoint.method.rawValue
+        request.httpMethod = method.rawValue
 
         for (header, value) in configuration.defaultHeaders {
             request.setValue(value, forHTTPHeaderField: header)
@@ -1105,7 +1128,9 @@ private struct RealSyncRemoteRequestBuilder {
 
         if let body {
             request.httpBody = body
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let contentType {
+                request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+            }
         }
 
         return request
@@ -1268,6 +1293,44 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
     }
 }
 
+struct UploadedMemoryAssetReference: Equatable {
+    let assetId: String
+    let memoryId: String
+    let spaceId: String
+    let storageKey: String
+    let mimeType: String
+    let byteSize: Int
+    let checksum: String?
+    let createdAt: Date
+    let uploadedByUserId: String
+}
+
+private struct RealSyncRemoteMemoryAssetUploadResponse: Decodable {
+    let assetId: String
+    let memoryId: String
+    let spaceId: String
+    let storageKey: String
+    let mimeType: String
+    let byteSize: Int
+    let checksum: String?
+    let createdAt: Date
+    let uploadedByUserId: String
+
+    func uploadedReference() -> UploadedMemoryAssetReference {
+        UploadedMemoryAssetReference(
+            assetId: assetId,
+            memoryId: memoryId,
+            spaceId: spaceId,
+            storageKey: storageKey,
+            mimeType: mimeType,
+            byteSize: byteSize,
+            checksum: checksum,
+            createdAt: createdAt,
+            uploadedByUserId: uploadedByUserId
+        )
+    }
+}
+
 // 未来真实同步远端实现正式落位在这里。
 // 真正开始接 API 时，优先只补这三个协议方法，不改 UI / AppSyncService 主流程。
 struct RealSyncRemoteProvider: AppSyncRemoteProviding {
@@ -1336,6 +1399,55 @@ struct RealSyncRemoteProvider: AppSyncRemoteProviding {
     func fetchRemoteSummary(for context: AppSyncRequestContext) async throws -> SyncRemotePayloadSummary? {
         _ = try await makePreparedRequest(endpoint: .fetchRemoteSummary, context: context)
         throw RealSyncRemoteProviderError.endpointNotImplemented(operation: "fetchRemoteSummary")
+    }
+
+    func uploadMemoryAsset(
+        data: Data,
+        mimeType: String,
+        memoryID: UUID,
+        context: AppSyncRequestContext
+    ) async throws -> UploadedMemoryAssetReference {
+        try validateConfiguration(for: context)
+        let authorization = try await resolveAuthorization(for: context)
+        let request = try requestBuilder.makeRequest(
+            method: .post,
+            pathComponents: ["spaces", context.spaceId, "memory-assets"],
+            queryItems: [URLQueryItem(name: "memoryId", value: memoryID.uuidString.lowercased())],
+            context: context,
+            authorization: authorization,
+            body: data,
+            contentType: mimeType
+        )
+
+        let responseData: Data
+        let response: HTTPURLResponse
+
+        do {
+            (responseData, response) = try await httpClient.execute(request)
+        } catch {
+            throw mapRequestFailure(error, operation: "uploadMemoryAsset")
+        }
+
+        guard (200...299).contains(response.statusCode) else {
+            throw RealSyncRemoteProviderError.unexpectedStatusCode(
+                operation: "uploadMemoryAsset",
+                statusCode: response.statusCode,
+                responseBody: responseBodyPreview(from: responseData)
+            )
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        do {
+            let payload = try decoder.decode(RealSyncRemoteMemoryAssetUploadResponse.self, from: responseData)
+            return payload.uploadedReference()
+        } catch {
+            throw RealSyncRemoteProviderError.responseDecodingFailed(
+                operation: "uploadMemoryAsset",
+                detail: error.localizedDescription
+            )
+        }
     }
 
     private func validateConfiguration(for context: AppSyncRequestContext) throws {
@@ -1798,6 +1910,50 @@ final class AppSyncService: ObservableObject {
         latestEventText = "已回到本地模式"
         latestErrorText = nil
         publishStatus()
+    }
+
+    @discardableResult
+    func uploadMemoryPhotoIfPossible(
+        for entry: MemoryTimelineEntry,
+        scope: AppContentScope,
+        memoryStore: MemoryStore
+    ) async -> UploadedMemoryAssetReference? {
+        guard canAttemptAutomaticBackendSync(for: scope) else { return nil }
+        guard let photoFilename = entry.photoFilename,
+              photoFilename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return nil
+        }
+
+        guard entry.remoteAssetID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            return nil
+        }
+
+        guard let imageData = MemoryPhotoStorage.imageData(for: photoFilename) else {
+            latestErrorText = "这条记忆的本地图片暂时读取失败，无法上传到测试环境。"
+            latestEventText = "记忆图片上传没有成功"
+            publishStatus()
+            return nil
+        }
+
+        do {
+            let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
+            let uploadedAsset = try await realSyncProvider.uploadMemoryAsset(
+                data: imageData,
+                mimeType: "image/jpeg",
+                memoryID: entry.id,
+                context: target.context
+            )
+            memoryStore.setRemoteAssetID(uploadedAsset.assetId, for: entry.id, in: target.scope)
+            latestErrorText = nil
+            latestEventText = "已为这条记忆上传图片资源（assetId: \(uploadedAsset.assetId)）"
+            publishStatus()
+            return uploadedAsset
+        } catch {
+            latestErrorText = error.localizedDescription
+            latestEventText = "记忆图片上传没有成功"
+            publishStatus()
+            return nil
+        }
     }
 
     func scheduleAutomaticPushIfPossible(
@@ -2294,14 +2450,14 @@ final class AppSyncService: ObservableObject {
             )
             debugWhisperSync("prepare push snapshot space=\(target.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
             if eventTextOverride == nil {
-                latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，小约定 \(rituals.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
+                latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（记忆 \(memories.count) 条，本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，小约定 \(rituals.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
             }
             publishStatus()
             try await realSyncProvider.pushContent(payload, context: context)
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPushAt = .now
             latestEventText = eventTextOverride
-                ?? "已发送 PUT /spaces/\(context.spaceId)/snapshot（本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，小约定 \(rituals.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
+                ?? "已发送 PUT /spaces/\(context.spaceId)/snapshot（记忆 \(memories.count) 条，本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，小约定 \(rituals.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
             if shouldRecordErrors {
                 latestErrorText = nil
             }
@@ -2393,7 +2549,7 @@ final class AppSyncService: ObservableObject {
         }
         latestErrorText = nil
         latestEventText = eventTextOverride
-            ?? "已将最近云端内容应用到当前空间（本周事项 \(latestPulledPayload.weeklyTodos.count) 条，今晚吃什么 \(latestPulledPayload.tonightDinners.count) 条，小约定 \(latestPulledPayload.rituals.count) 条，当前状态 \(latestPulledPayload.currentStatuses.count) 条，悄悄话 \(latestPulledPayload.whisperNotes.count) 条）"
+            ?? "已将最近云端内容应用到当前空间（记忆 \(latestPulledPayload.memories.count) 条，本周事项 \(latestPulledPayload.weeklyTodos.count) 条，今晚吃什么 \(latestPulledPayload.tonightDinners.count) 条，小约定 \(latestPulledPayload.rituals.count) 条，当前状态 \(latestPulledPayload.currentStatuses.count) 条，悄悄话 \(latestPulledPayload.whisperNotes.count) 条）"
         publishStatus()
         return true
     }
@@ -2440,7 +2596,7 @@ final class AppSyncService: ObservableObject {
 
             if didApply {
                 latestErrorText = nil
-                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照（本周事项 \(payload.weeklyTodos.count) 条，今晚吃什么 \(payload.tonightDinners.count) 条，小约定 \(payload.rituals.count) 条，当前状态 \(payload.currentStatuses.count) 条，悄悄话 \(payload.whisperNotes.count) 条）"
+                latestEventText = "已以 \(context.accountId) / \(context.currentUserId) 读取并应用空间 \(context.spaceId) 的快照（记忆 \(payload.memories.count) 条，本周事项 \(payload.weeklyTodos.count) 条，今晚吃什么 \(payload.tonightDinners.count) 条，小约定 \(payload.rituals.count) 条，当前状态 \(payload.currentStatuses.count) 条，悄悄话 \(payload.whisperNotes.count) 条）"
             }
 
             isSyncing = false
@@ -2632,7 +2788,7 @@ final class AppSyncService: ObservableObject {
             latestEventText = "进入“我的”页时发现新的共享内容，可手动应用"
         case .accountSyncAppeared:
             latestEventText = "进入“账号与同步”页时发现新的共享内容，可手动应用"
-        case .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
+        case .memoriesChanged, .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
             latestEventText = "发现新的共享内容，可手动应用"
         }
         publishStatus()
