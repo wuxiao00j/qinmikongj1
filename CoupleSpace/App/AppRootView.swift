@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AppRootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    private let automaticPullHeartbeat = Timer.publish(every: 6, on: .main, in: .common).autoconnect()
     @StateObject private var navigationState = AppNavigationState()
     @StateObject private var memoryStore = MemoryStore()
     @StateObject private var wishStore = WishStore()
@@ -75,6 +76,7 @@ struct AppRootView: View {
                     memories: memoryStore.entries(in: relationshipStore.contentScope),
                     memoryTombstones: memoryStore.deletionTombstones(in: relationshipStore.contentScope),
                     wishes: wishStore.wishes(in: relationshipStore.contentScope),
+                    wishTombstones: wishStore.deletionTombstones(in: relationshipStore.contentScope),
                     anniversaries: anniversaryStore.anniversaries(in: relationshipStore.contentScope),
                     weeklyTodos: weeklyTodoStore.items(in: relationshipStore.contentScope),
                     tonightDinners: tonightDinnerStore.items(in: relationshipStore.contentScope),
@@ -117,6 +119,12 @@ struct AppRootView: View {
         .onReceive(wishStore.$wishes.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .wishesChanged)
         }
+        .onReceive(wishStore.$deletionTombstones.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .wishesChanged)
+        }
+        .onReceive(anniversaryStore.$anniversaries.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .anniversariesChanged)
+        }
         .onReceive(weeklyTodoStore.$items.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .weeklyTodosChanged)
         }
@@ -131,6 +139,35 @@ struct AppRootView: View {
         }
         .onReceive(whisperNoteStore.$items.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .whisperNotesChanged)
+        }
+        .onReceive(automaticPullHeartbeat) { _ in
+            guard scenePhase == .active else { return }
+            syncService.scheduleAutomaticPullIfPossible(
+                scope: relationshipStore.contentScope,
+                memoryStore: memoryStore,
+                wishStore: wishStore,
+                anniversaryStore: anniversaryStore,
+                weeklyTodoStore: weeklyTodoStore,
+                tonightDinnerStore: tonightDinnerStore,
+                ritualStore: ritualStore,
+                currentStatusStore: currentStatusStore,
+                whisperNoteStore: whisperNoteStore,
+                trigger: .foregroundHeartbeat
+            )
+        }
+        .onChange(of: syncService.status.lastPushAt) { oldValue, newValue in
+            guard let newValue, newValue != oldValue else { return }
+            syncService.schedulePostPushConvergencePullIfPossible(
+                scope: relationshipStore.contentScope,
+                memoryStore: memoryStore,
+                wishStore: wishStore,
+                anniversaryStore: anniversaryStore,
+                weeklyTodoStore: weeklyTodoStore,
+                tonightDinnerStore: tonightDinnerStore,
+                ritualStore: ritualStore,
+                currentStatusStore: currentStatusStore,
+                whisperNoteStore: whisperNoteStore
+            )
         }
         .onOpenURL { url in
             navigationState.handleOpenURL(url)
@@ -178,6 +215,7 @@ struct AppRootView: View {
             memories: memoryStore.entries(in: scope),
             memoryTombstones: memoryStore.deletionTombstones(in: scope),
             wishes: wishStore.wishes(in: scope),
+            wishTombstones: wishStore.deletionTombstones(in: scope),
             anniversaries: anniversaryStore.anniversaries(in: scope),
             weeklyTodos: weeklyTodoStore.items(in: scope),
             tonightDinners: tonightDinnerStore.items(in: scope),

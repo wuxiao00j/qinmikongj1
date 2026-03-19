@@ -187,6 +187,15 @@ class StoredRemoteWishModel(BaseModel):
     syncStatusRawValue: str
 
 
+class StoredRemoteWishTombstoneModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    spaceId: str
+    deletedByUserId: str
+    deletedAt: datetime
+
+
 class StoredRemoteAnniversaryModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -286,6 +295,7 @@ class StoredSnapshotRequestModel(BaseModel):
     memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
     memoryTombstones: list[StoredRemoteMemoryTombstoneModel] = Field(default_factory=list)
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
+    wishTombstones: list[StoredRemoteWishTombstoneModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     tonightDinners: list[StoredRemoteTonightDinnerModel] = Field(default_factory=list)
@@ -307,6 +317,7 @@ class RemoteSnapshotResponseModel(BaseModel):
     memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
     memoryTombstones: list[StoredRemoteMemoryTombstoneModel] = Field(default_factory=list)
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
+    wishTombstones: list[StoredRemoteWishTombstoneModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     tonightDinners: list[StoredRemoteTonightDinnerModel] = Field(default_factory=list)
@@ -324,6 +335,7 @@ class SnapshotRecordModel(BaseModel):
     memories: list[StoredRemoteMemoryModel] = Field(default_factory=list)
     memoryTombstones: list[StoredRemoteMemoryTombstoneModel] = Field(default_factory=list)
     wishes: list[StoredRemoteWishModel] = Field(default_factory=list)
+    wishTombstones: list[StoredRemoteWishTombstoneModel] = Field(default_factory=list)
     anniversaries: list[StoredRemoteAnniversaryModel] = Field(default_factory=list)
     weeklyTodos: list[StoredRemoteWeeklyTodoModel] = Field(default_factory=list)
     tonightDinners: list[StoredRemoteTonightDinnerModel] = Field(default_factory=list)
@@ -647,6 +659,7 @@ def default_snapshot_record(space_id: str, account: Account) -> SnapshotRecordMo
         memories=[],
         memoryTombstones=[],
         wishes=[],
+        wishTombstones=[],
         anniversaries=[],
         weeklyTodos=[],
         tonightDinners=[],
@@ -665,6 +678,7 @@ def make_snapshot_record(space_id: str, account: Account, relation_status: str) 
         memories=[],
         memoryTombstones=[],
         wishes=[],
+        wishTombstones=[],
         anniversaries=[],
         weeklyTodos=[],
         tonightDinners=[],
@@ -743,15 +757,77 @@ def merge_memory_snapshot_state(
     )
 
 
+def filter_wishes_by_tombstones(
+    wishes: list[StoredRemoteWishModel],
+    tombstones: list[StoredRemoteWishTombstoneModel],
+) -> list[StoredRemoteWishModel]:
+    deleted_ids = {tombstone.id for tombstone in tombstones}
+    if not deleted_ids:
+        return wishes
+    return [wish for wish in wishes if wish.id not in deleted_ids]
+
+
+def merge_wish_snapshot_state(
+    existing_snapshot: SnapshotRecordModel | None,
+    incoming_snapshot: SnapshotRecordModel,
+) -> SnapshotRecordModel:
+    if existing_snapshot is None:
+        effective_wishes = filter_wishes_by_tombstones(
+            incoming_snapshot.wishes,
+            incoming_snapshot.wishTombstones,
+        )
+        return incoming_snapshot.model_copy(update={"wishes": effective_wishes})
+
+    merged_tombstones_by_id: dict[str, StoredRemoteWishTombstoneModel] = {
+        tombstone.id: tombstone for tombstone in existing_snapshot.wishTombstones
+    }
+    for tombstone in incoming_snapshot.wishTombstones:
+        existing_tombstone = merged_tombstones_by_id.get(tombstone.id)
+        if existing_tombstone is None or tombstone.deletedAt >= existing_tombstone.deletedAt:
+            merged_tombstones_by_id[tombstone.id] = tombstone
+
+    merged_wishes_by_id: dict[str, StoredRemoteWishModel] = {
+        wish.id: wish for wish in existing_snapshot.wishes
+    }
+    for wish in incoming_snapshot.wishes:
+        existing_wish = merged_wishes_by_id.get(wish.id)
+        if existing_wish is None or wish.updatedAt >= existing_wish.updatedAt:
+            merged_wishes_by_id[wish.id] = wish
+
+    merged_tombstones = sorted(
+        merged_tombstones_by_id.values(),
+        key=lambda item: item.deletedAt,
+        reverse=True,
+    )
+    merged_wishes = sorted(
+        filter_wishes_by_tombstones(
+            list(merged_wishes_by_id.values()),
+            merged_tombstones,
+        ),
+        key=lambda item: item.updatedAt,
+        reverse=True,
+    )
+
+    return incoming_snapshot.model_copy(
+        update={
+            "wishes": merged_wishes,
+            "wishTombstones": merged_tombstones,
+        }
+    )
+
+
 def build_snapshot_response(session: Session, space: Space, account: Account) -> dict[str, Any]:
     snapshot = get_snapshot_record(space, account)
     effective_memories = filter_memories_by_tombstones(snapshot.memories, snapshot.memoryTombstones)
+    effective_wishes = filter_wishes_by_tombstones(snapshot.wishes, snapshot.wishTombstones)
     logger.info(
-        "snapshot GET response space=%s account=%s memories=%s memory_tombstones=%s whisperNotes=%s",
+        "snapshot GET response space=%s account=%s memories=%s memory_tombstones=%s wishes=%s wish_tombstones=%s whisperNotes=%s",
         space.space_id,
         account.account_id,
         len(effective_memories),
         len(snapshot.memoryTombstones),
+        len(effective_wishes),
+        len(snapshot.wishTombstones),
         len(snapshot.whisperNotes),
     )
     return RemoteSnapshotResponseModel(
@@ -762,7 +838,8 @@ def build_snapshot_response(session: Session, space: Space, account: Account) ->
         isSharedSpace=len(space.members) > 1,
         memories=effective_memories,
         memoryTombstones=snapshot.memoryTombstones,
-        wishes=snapshot.wishes,
+        wishes=effective_wishes,
+        wishTombstones=snapshot.wishTombstones,
         anniversaries=snapshot.anniversaries,
         weeklyTodos=snapshot.weeklyTodos,
         tonightDinners=snapshot.tonightDinners,
@@ -795,22 +872,29 @@ def normalize_snapshot_payload(
                 message="payload 中的 currentUserId 与当前 token 不一致。",
             )
         logger.info(
-            "snapshot PUT normalized stored payload space=%s account=%s memories=%s memory_tombstones=%s whisperNotes=%s",
+            "snapshot PUT normalized stored payload space=%s account=%s memories=%s memory_tombstones=%s wishes=%s wish_tombstones=%s whisperNotes=%s",
             path_space_id,
             account.account_id,
             len(stored_payload.memories),
             len(stored_payload.memoryTombstones),
+            len(stored_payload.wishes),
+            len(stored_payload.wishTombstones),
             len(stored_payload.whisperNotes),
         )
         effective_memories = filter_memories_by_tombstones(
             stored_payload.memories,
             stored_payload.memoryTombstones,
         )
+        effective_wishes = filter_wishes_by_tombstones(
+            stored_payload.wishes,
+            stored_payload.wishTombstones,
+        )
         return SnapshotRecordModel(
             snapshotId=f"snapshot-{path_space_id}-{uuid4().hex[:12]}",
             memories=effective_memories,
             memoryTombstones=stored_payload.memoryTombstones,
-            wishes=stored_payload.wishes,
+            wishes=effective_wishes,
+            wishTombstones=stored_payload.wishTombstones,
             anniversaries=stored_payload.anniversaries,
             weeklyTodos=stored_payload.weeklyTodos,
             tonightDinners=stored_payload.tonightDinners,
@@ -847,22 +931,29 @@ def normalize_snapshot_payload(
                 message="payload 中的 partnerUserId 与当前空间不一致。",
             )
         logger.info(
-            "snapshot PUT normalized remote payload space=%s account=%s memories=%s memory_tombstones=%s whisperNotes=%s",
+            "snapshot PUT normalized remote payload space=%s account=%s memories=%s memory_tombstones=%s wishes=%s wish_tombstones=%s whisperNotes=%s",
             path_space_id,
             account.account_id,
             len(remote_payload.memories),
             len(remote_payload.memoryTombstones),
+            len(remote_payload.wishes),
+            len(remote_payload.wishTombstones),
             len(remote_payload.whisperNotes),
         )
         effective_memories = filter_memories_by_tombstones(
             remote_payload.memories,
             remote_payload.memoryTombstones,
         )
+        effective_wishes = filter_wishes_by_tombstones(
+            remote_payload.wishes,
+            remote_payload.wishTombstones,
+        )
         return SnapshotRecordModel(
             snapshotId=f"snapshot-{path_space_id}-{uuid4().hex[:12]}",
             memories=effective_memories,
             memoryTombstones=remote_payload.memoryTombstones,
-            wishes=remote_payload.wishes,
+            wishes=effective_wishes,
+            wishTombstones=remote_payload.wishTombstones,
             anniversaries=remote_payload.anniversaries,
             weeklyTodos=remote_payload.weeklyTodos,
             tonightDinners=remote_payload.tonightDinners,
@@ -891,6 +982,7 @@ def save_snapshot(session: Session, space: Space, snapshot_record: SnapshotRecor
         else None
     )
     merged_snapshot = merge_memory_snapshot_state(existing_snapshot, snapshot_record)
+    merged_snapshot = merge_wish_snapshot_state(existing_snapshot, merged_snapshot)
 
     if space.snapshot is None:
         session.add(
@@ -908,11 +1000,13 @@ def save_snapshot(session: Session, space: Space, snapshot_record: SnapshotRecor
         space.snapshot.updated_by_account_id = merged_snapshot.lastUpdatedByAccountId
         space.snapshot.updated_at = merged_snapshot.updatedAt
     logger.info(
-        "snapshot persisted space=%s updatedBy=%s memories=%s memory_tombstones=%s whisperNotes=%s",
+        "snapshot persisted space=%s updatedBy=%s memories=%s memory_tombstones=%s wishes=%s wish_tombstones=%s whisperNotes=%s",
         space.space_id,
         merged_snapshot.lastUpdatedByAccountId,
         len(merged_snapshot.memories),
         len(merged_snapshot.memoryTombstones),
+        len(merged_snapshot.wishes),
+        len(merged_snapshot.wishTombstones),
         len(merged_snapshot.whisperNotes),
     )
     session.commit()

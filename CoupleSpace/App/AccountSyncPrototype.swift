@@ -10,12 +10,17 @@ private func debugAutomaticPush(_ message: @autoclosure () -> String) {
     print("[AutomaticPush] \(message())")
 }
 
+private func debugMemorySync(_ message: @autoclosure () -> String) {
+    print("[MemorySync] \(message())")
+}
+
 private func debugMemoryAssetSync(_ message: @autoclosure () -> String) {
     print("[MemoryAssetSync] \(message())")
 }
 #else
 private func debugWhisperSync(_ message: @autoclosure () -> String) {}
 private func debugAutomaticPush(_ message: @autoclosure () -> String) {}
+private func debugMemorySync(_ message: @autoclosure () -> String) {}
 private func debugMemoryAssetSync(_ message: @autoclosure () -> String) {}
 #endif
 
@@ -320,6 +325,7 @@ struct SyncContentPayload {
     let memories: [MemoryTimelineEntry]
     let memoryTombstones: [MemoryDeletionTombstone]
     let wishes: [PlaceWish]
+    let wishTombstones: [WishDeletionTombstone]
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
     let tonightDinners: [TonightDinnerOption]
@@ -375,6 +381,7 @@ struct SyncContentPayload {
             memories: payload.memories,
             memoryTombstones: payload.memoryTombstones,
             wishes: payload.wishes,
+            wishTombstones: payload.wishTombstones,
             anniversaries: payload.anniversaries,
             weeklyTodos: payload.weeklyTodos,
             tonightDinners: payload.tonightDinners,
@@ -399,6 +406,7 @@ struct RemoteSyncSnapshotPayload {
     let memories: [MemoryTimelineEntry]
     let memoryTombstones: [MemoryDeletionTombstone]
     let wishes: [PlaceWish]
+    let wishTombstones: [WishDeletionTombstone]
     let anniversaries: [AnniversaryItem]
     let weeklyTodos: [WeeklyTodoItem]
     let tonightDinners: [TonightDinnerOption]
@@ -528,6 +536,7 @@ struct SyncRemotePayloadSummary: Equatable {
 enum AutomaticSyncTrigger: String {
     case memoriesChanged
     case wishesChanged
+    case anniversariesChanged
     case weeklyTodosChanged
     case tonightDinnersChanged
     case ritualsChanged
@@ -536,6 +545,7 @@ enum AutomaticSyncTrigger: String {
     case appBecameActive
     case meViewAppeared
     case accountSyncAppeared
+    case foregroundHeartbeat
 
     var automaticPushEventText: String {
         switch self {
@@ -543,6 +553,8 @@ enum AutomaticSyncTrigger: String {
             return "已自动同步最新记忆到测试环境"
         case .wishesChanged:
             return "已自动同步最新愿望改动到测试环境"
+        case .anniversariesChanged:
+            return "已自动同步最新纪念日改动到测试环境"
         case .weeklyTodosChanged:
             return "已自动同步最新本周事项到测试环境"
         case .tonightDinnersChanged:
@@ -555,6 +567,8 @@ enum AutomaticSyncTrigger: String {
             return "已自动同步最新悄悄话到测试环境"
         case .appBecameActive, .meViewAppeared, .accountSyncAppeared:
             return "已自动同步最近内容到测试环境"
+        case .foregroundHeartbeat:
+            return "已自动同步最近内容到测试环境"
         }
     }
 
@@ -566,7 +580,9 @@ enum AutomaticSyncTrigger: String {
             return "已在进入“我的”页时检查最近云端快照"
         case .accountSyncAppeared:
             return "已在进入“账号与同步”页时检查最近云端快照"
-        case .memoriesChanged, .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
+        case .foregroundHeartbeat:
+            return "已自动检查最近共享内容"
+        case .memoriesChanged, .wishesChanged, .anniversariesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
             return "已检查最近云端快照"
         }
     }
@@ -1202,6 +1218,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
     let memories: [StoredRemoteMemory]
     let memoryTombstones: [StoredRemoteMemoryTombstone]
     let wishes: [StoredRemoteWish]
+    let wishTombstones: [StoredRemoteWishTombstone]
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
     let tonightDinners: [StoredRemoteTonightDinner]
@@ -1222,6 +1239,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         case memories
         case memoryTombstones
         case wishes
+        case wishTombstones
         case anniversaries
         case weeklyTodos
         case tonightDinners
@@ -1246,6 +1264,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         memories = try container.decodeIfPresent([StoredRemoteMemory].self, forKey: .memories) ?? []
         memoryTombstones = try container.decodeIfPresent([StoredRemoteMemoryTombstone].self, forKey: .memoryTombstones) ?? []
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
+        wishTombstones = try container.decodeIfPresent([StoredRemoteWishTombstone].self, forKey: .wishTombstones) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
         tonightDinners = try container.decodeIfPresent([StoredRemoteTonightDinner].self, forKey: .tonightDinners) ?? []
@@ -1312,6 +1331,7 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
             memories: memories.map(\.model),
             memoryTombstones: memoryTombstones.map(\.model),
             wishes: wishes.map(\.model),
+            wishTombstones: wishTombstones.map(\.model),
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
             tonightDinners: tonightDinners.map(\.model),
@@ -1851,6 +1871,7 @@ final class AppSyncService: ObservableObject {
     private var isSyncing = false
     private var latestPulledPayload: SyncContentPayload?
     private var lastPushAt: Date?
+    private var lastPushedSnapshotUpdatedAt: Date?
     private var lastPullAt: Date?
     private var lastAppliedAt: Date?
     private var lastAppliedRemoteUpdatedAt: Date?
@@ -1859,15 +1880,19 @@ final class AppSyncService: ObservableObject {
     private var latestErrorText: String?
     private var automaticPushTask: Task<Void, Never>?
     private var automaticPullTask: Task<Void, Never>?
+    private var deferredAutomaticApplyTask: Task<Void, Never>?
+    private var postPushConvergencePullTask: Task<Void, Never>?
     private var memoryAssetUploadTasks: [UUID: Task<Void, Never>] = [:]
     private var latestAutomaticPushSignature: String?
     private var lastAutomaticPullAt: Date?
     private var automaticPushSuppressedUntil: Date?
     private var lastLocalSharedContentMutationAt: Date?
     private let automaticPushDebounceNanoseconds: UInt64 = 1_500_000_000
-    private let automaticPullMinimumInterval: TimeInterval = 20
+    private let automaticPullMinimumInterval: TimeInterval = 6
+    private let automaticPullHeartbeatInterval: TimeInterval = 6
     private let automaticApplyLocalMutationCooldown: TimeInterval = 8
     private let automaticApplyRecentPushCooldown: TimeInterval = 6
+    private let postPushConvergencePullDelay: TimeInterval = 6.5
 
     init(
         sessionStore: AccountSessionStore,
@@ -1967,10 +1992,13 @@ final class AppSyncService: ObservableObject {
     func returnToLocalMode() {
         automaticPushTask?.cancel()
         automaticPullTask?.cancel()
+        deferredAutomaticApplyTask?.cancel()
+        postPushConvergencePullTask?.cancel()
         latestAutomaticPushSignature = nil
         lastAutomaticPullAt = nil
         automaticPushSuppressedUntil = nil
         lastLocalSharedContentMutationAt = nil
+        lastPushedSnapshotUpdatedAt = nil
         lastAppliedRemoteUpdatedAt = nil
         lastDeferredRemoteUpdatedAt = nil
         markPendingAutomaticPush(false)
@@ -2089,6 +2117,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
+        wishTombstones: [WishDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
@@ -2102,6 +2131,10 @@ final class AppSyncService: ObservableObject {
             debugAutomaticPush("schedule skipped trigger=\(trigger.rawValue) reason=backend sync unavailable")
             return
         }
+        postPushConvergencePullTask?.cancel()
+        postPushConvergencePullTask = nil
+        deferredAutomaticApplyTask?.cancel()
+        deferredAutomaticApplyTask = nil
         lastLocalSharedContentMutationAt = .now
         markPendingAutomaticPush(true)
 
@@ -2109,6 +2142,7 @@ final class AppSyncService: ObservableObject {
             memories: memories,
             memoryTombstones: memoryTombstones,
             wishes: wishes,
+            wishTombstones: wishTombstones,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
             tonightDinners: tonightDinners,
@@ -2120,6 +2154,9 @@ final class AppSyncService: ObservableObject {
 
         debugAutomaticPush(
             "schedule automatic push trigger=\(trigger.rawValue) signature=\(signature) memories=\(memories.count) memoryTombstones=\(memoryTombstones.count) wishes=\(wishes.count) weeklyTodos=\(weeklyTodos.count)"
+        )
+        debugMemorySync(
+            "schedule push trigger=\(trigger.rawValue) scope=\(scope.spaceId) memories=\(memoryDebugSummary(memories)) tombstones=\(memoryTombstoneDebugSummary(memoryTombstones))"
         )
         if automaticPushTask != nil {
             debugAutomaticPush("schedule automatic push replacing existing task trigger=\(trigger.rawValue)")
@@ -2172,11 +2209,15 @@ final class AppSyncService: ObservableObject {
                 return
             }
             debugAutomaticPush("performing delayed push trigger=\(trigger.rawValue) signature=\(signature)")
+            debugMemorySync(
+                "perform push trigger=\(trigger.rawValue) scope=\(scope.spaceId) memories=\(self.memoryDebugSummary(memories)) tombstones=\(self.memoryTombstoneDebugSummary(memoryTombstones))"
+            )
 
             let didPush = await self.pushCurrentScopeContentToLocalBackend(
                 memories: memories,
                 memoryTombstones: memoryTombstones,
                 wishes: wishes,
+                wishTombstones: wishTombstones,
                 anniversaries: anniversaries,
                 weeklyTodos: weeklyTodos,
                 tonightDinners: tonightDinners,
@@ -2190,11 +2231,13 @@ final class AppSyncService: ObservableObject {
 
             guard didPush else {
                 debugAutomaticPush("delayed push finished trigger=\(trigger.rawValue) result=failed")
+                debugMemorySync("push failed trigger=\(trigger.rawValue) scope=\(scope.spaceId)")
                 return
             }
             self.latestAutomaticPushSignature = signature
             self.markPendingAutomaticPush(false)
             debugAutomaticPush("delayed push finished trigger=\(trigger.rawValue) result=success")
+            debugMemorySync("push finished trigger=\(trigger.rawValue) scope=\(scope.spaceId) result=success")
         }
     }
 
@@ -2203,6 +2246,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
+        wishTombstones: [WishDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
@@ -2221,6 +2265,7 @@ final class AppSyncService: ObservableObject {
             memories: memories,
             memoryTombstones: memoryTombstones,
             wishes: wishes,
+            wishTombstones: wishTombstones,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
             tonightDinners: tonightDinners,
@@ -2251,6 +2296,8 @@ final class AppSyncService: ObservableObject {
             return
         }
 
+        let shouldSurfaceActivity = trigger != .foregroundHeartbeat
+
         automaticPullTask?.cancel()
         automaticPullTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -2260,19 +2307,52 @@ final class AppSyncService: ObservableObject {
             self.lastAutomaticPullAt = .now
             guard let payload = await self.pullCurrentScopeContentFromLocalBackend(
                 scope: scope,
-                eventTextOverride: trigger.automaticPullEventText,
-                shouldRecordErrors: false
+                eventTextOverride: shouldSurfaceActivity ? trigger.automaticPullEventText : nil,
+                shouldRecordErrors: false,
+                shouldSurfaceActivity: shouldSurfaceActivity
             ) else {
                 return
             }
 
-            let shouldAutoApply = self.shouldAutomaticallyApplyPulledContent(
-                payload,
+            if let staleReason = self.staleReasonForAutomaticApply(payload) {
+                debugAutomaticPush(
+                    "automatic pull payload marked stale trigger=\(trigger.rawValue) reason=\(staleReason)"
+                )
+                debugMemorySync(
+                    "pull stale trigger=\(trigger.rawValue) reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(self.memoryDebugSummary(payload.memories)) tombstones=\(self.memoryTombstoneDebugSummary(payload.memoryTombstones))"
+                )
+                if self.latestPulledPayload?.updatedAt == payload.updatedAt {
+                    self.latestPulledPayload = nil
+                }
+                self.lastDeferredRemoteUpdatedAt = nil
+                return
+            }
+
+            let autoApplyDelay = self.automaticApplyDelayIfPossible(
+                for: payload,
                 into: scope
             )
 
-            guard shouldAutoApply else {
+            guard let autoApplyDelay else {
                 self.notePendingPulledContentIfNeeded(payload, trigger: trigger)
+                return
+            }
+
+            if autoApplyDelay > 0 {
+                self.notePendingPulledContentIfNeeded(payload, trigger: trigger)
+                self.scheduleDeferredAutomaticApplyIfPossible(
+                    after: autoApplyDelay,
+                    payload: payload,
+                    scope: scope,
+                    memoryStore: memoryStore,
+                    wishStore: wishStore,
+                    anniversaryStore: anniversaryStore,
+                    weeklyTodoStore: weeklyTodoStore,
+                    tonightDinnerStore: tonightDinnerStore,
+                    ritualStore: ritualStore,
+                    currentStatusStore: currentStatusStore,
+                    whisperNoteStore: whisperNoteStore
+                )
                 return
             }
 
@@ -2290,6 +2370,8 @@ final class AppSyncService: ObservableObject {
             )
 
             if didApply {
+                self.deferredAutomaticApplyTask?.cancel()
+                self.deferredAutomaticApplyTask = nil
                 self.lastDeferredRemoteUpdatedAt = nil
             }
         }
@@ -2299,6 +2381,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
+        wishTombstones: [WishDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
@@ -2308,11 +2391,13 @@ final class AppSyncService: ObservableObject {
         scope: AppContentScope
     ) -> SyncContentPayload {
         let deletedMemoryIDs = Set(memoryTombstones.map(\.id))
+        let deletedWishIDs = Set(wishTombstones.map(\.id))
         return SyncContentPayload(
             scope: scope,
             memories: memories.filter { deletedMemoryIDs.contains($0.id) == false },
             memoryTombstones: memoryTombstones,
-            wishes: wishes,
+            wishes: wishes.filter { deletedWishIDs.contains($0.id) == false },
+            wishTombstones: wishTombstones,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
             tonightDinners: tonightDinners,
@@ -2479,6 +2564,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
+        wishTombstones: [WishDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
@@ -2496,6 +2582,7 @@ final class AppSyncService: ObservableObject {
             memories: memories,
             memoryTombstones: memoryTombstones,
             wishes: wishes,
+            wishTombstones: wishTombstones,
             anniversaries: anniversaries,
             weeklyTodos: weeklyTodos,
             tonightDinners: tonightDinners,
@@ -2552,7 +2639,8 @@ final class AppSyncService: ObservableObject {
         await pullCurrentScopeContentFromLocalBackend(
             scope: scope,
             eventTextOverride: nil,
-            shouldRecordErrors: true
+            shouldRecordErrors: true,
+            shouldSurfaceActivity: true
         )
     }
 
@@ -2560,44 +2648,54 @@ final class AppSyncService: ObservableObject {
     private func pullCurrentScopeContentFromLocalBackend(
         scope: AppContentScope,
         eventTextOverride: String?,
-        shouldRecordErrors: Bool
+        shouldRecordErrors: Bool,
+        shouldSurfaceActivity: Bool
     ) async -> SyncContentPayload? {
         isSyncing = true
-        if shouldRecordErrors {
-            latestErrorText = nil
+        if shouldSurfaceActivity {
+            if shouldRecordErrors {
+                latestErrorText = nil
+            }
+            if eventTextOverride == nil {
+                latestEventText = "正在从测试环境读取最近快照"
+            }
+            publishStatus()
         }
-        if eventTextOverride == nil {
-            latestEventText = "正在从测试环境读取最近快照"
-        }
-        publishStatus()
 
         do {
             let target = try await resolveManualBackendSyncTarget(preferredScope: scope)
             let context = target.context
-            if eventTextOverride == nil {
+            if shouldSurfaceActivity, eventTextOverride == nil {
                 latestEventText = "正在以 \(context.accountId) / \(context.currentUserId) 读取 GET /spaces/\(context.spaceId)/snapshot"
+                publishStatus()
             }
-            publishStatus()
             let payload = try await realSyncProvider.pullContent(for: context)
             debugWhisperSync("pull complete space=\(payload.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            debugMemorySync(
+                "pull success account=\(context.accountId) user=\(context.currentUserId) space=\(payload.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
+            )
             latestPulledPayload = payload
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPullAt = .now
-            latestEventText = eventTextOverride
-                ?? "已以 \(context.accountId) / \(context.currentUserId) 从测试环境拉取最近快照"
-            if shouldRecordErrors {
-                latestErrorText = nil
-            }
             isSyncing = false
-            publishStatus()
+            if shouldSurfaceActivity {
+                latestEventText = eventTextOverride
+                    ?? "已以 \(context.accountId) / \(context.currentUserId) 从测试环境拉取最近快照"
+                if shouldRecordErrors {
+                    latestErrorText = nil
+                }
+                publishStatus()
+            }
             return payload
         } catch {
+            isSyncing = false
             if shouldRecordErrors {
                 latestErrorText = error.localizedDescription
-                latestEventText = "这次没有从测试环境拉取到快照"
             }
-            isSyncing = false
-            publishStatus()
+            if shouldSurfaceActivity {
+                latestEventText = "这次没有从测试环境拉取到快照"
+                publishStatus()
+            }
             return nil
         }
     }
@@ -2607,6 +2705,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
+        wishTombstones: [WishDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodoStore: WeeklyTodoStore,
         tonightDinnerStore: TonightDinnerStore,
@@ -2625,6 +2724,7 @@ final class AppSyncService: ObservableObject {
             memories: memories,
             memoryTombstones: memoryTombstones,
             wishes: wishes,
+            wishTombstones: wishTombstones,
             anniversaries: anniversaries,
             weeklyTodos: resolvedWeeklyTodos,
             tonightDinners: resolvedTonightDinners,
@@ -2642,6 +2742,7 @@ final class AppSyncService: ObservableObject {
         memories: [MemoryTimelineEntry],
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
+        wishTombstones: [WishDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
@@ -2668,6 +2769,7 @@ final class AppSyncService: ObservableObject {
                 memories: memories,
                 memoryTombstones: memoryTombstones,
                 wishes: wishes,
+                wishTombstones: wishTombstones,
                 anniversaries: anniversaries,
                 weeklyTodos: weeklyTodos,
                 tonightDinners: tonightDinners,
@@ -2677,6 +2779,9 @@ final class AppSyncService: ObservableObject {
                 scope: target.scope
             )
             debugWhisperSync("prepare push snapshot space=\(target.scope.spaceId) whisperNotes=\(payload.whisperNotes.count)")
+            debugMemorySync(
+                "push request account=\(context.accountId) user=\(context.currentUserId) space=\(target.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
+            )
             if eventTextOverride == nil {
                 latestEventText = "正在发送 PUT /spaces/\(context.spaceId)/snapshot（记忆 \(payload.memories.count) 条，记忆删除标记 \(payload.memoryTombstones.count) 条，本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，小约定 \(rituals.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
             }
@@ -2684,6 +2789,17 @@ final class AppSyncService: ObservableObject {
             try await realSyncProvider.pushContent(payload, context: context)
             remoteSummary = SyncRemotePayloadSummary(payload: payload)
             lastPushAt = .now
+            lastPushedSnapshotUpdatedAt = payload.updatedAt
+            debugMemorySync(
+                "push success account=\(context.accountId) user=\(context.currentUserId) space=\(target.scope.spaceId) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
+            )
+            deferredAutomaticApplyTask?.cancel()
+            deferredAutomaticApplyTask = nil
+            if let latestPulledPayload,
+               shouldTreatPulledPayloadAsStaleForAutomaticApply(latestPulledPayload) {
+                self.latestPulledPayload = nil
+                self.lastDeferredRemoteUpdatedAt = nil
+            }
             markPendingAutomaticPush(false)
             latestEventText = eventTextOverride
                 ?? "已发送 PUT /spaces/\(context.spaceId)/snapshot（记忆 \(payload.memories.count) 条，记忆删除标记 \(payload.memoryTombstones.count) 条，本周事项 \(weeklyTodos.count) 条，今晚吃什么 \(tonightDinners.count) 条，小约定 \(rituals.count) 条，当前状态 \(currentStatuses.count) 条，悄悄话 \(whisperNotes.count) 条）"
@@ -2694,6 +2810,7 @@ final class AppSyncService: ObservableObject {
             publishStatus()
             return true
         } catch {
+            debugMemorySync("push error space=\(scope.spaceId) error=\(error.localizedDescription)")
             if shouldRecordErrors {
                 latestErrorText = error.localizedDescription
                 latestEventText = "这次没有发出 PUT /spaces/\(scope.spaceId)/snapshot"
@@ -2759,17 +2876,30 @@ final class AppSyncService: ObservableObject {
 
         let applyScope = latestPulledPayload.scope
         debugWhisperSync("apply latest payload space=\(applyScope.spaceId) whisperNotes=\(latestPulledPayload.whisperNotes.count)")
+        let localBeforeEntries = memoryStore.entries(in: applyScope)
         automaticPushSuppressedUntil = Date().addingTimeInterval(2)
+        deferredAutomaticApplyTask?.cancel()
+        deferredAutomaticApplyTask = nil
         let effectiveMemoryTombstones = memoryStore.mergeDeletionTombstones(
             in: applyScope,
             with: latestPulledPayload.memoryTombstones
         )
         let deletedMemoryIDs = Set(effectiveMemoryTombstones.map(\.id))
-        memoryStore.replaceEntries(
-            in: applyScope,
-            with: latestPulledPayload.memories.filter { deletedMemoryIDs.contains($0.id) == false }
+        let remoteEffectiveEntries = latestPulledPayload.memories.filter { deletedMemoryIDs.contains($0.id) == false }
+        debugMemorySync(
+            "apply begin space=\(applyScope.spaceId) payloadUpdatedAt=\(latestPulledPayload.updatedAt.timeIntervalSince1970) localBefore=\(memoryDebugSummary(localBeforeEntries)) remote=\(memoryDebugSummary(remoteEffectiveEntries)) tombstones=\(memoryTombstoneDebugSummary(effectiveMemoryTombstones))"
         )
-        wishStore.replaceWishes(in: applyScope, with: latestPulledPayload.wishes)
+        memoryStore.mergeRemoteEntries(
+            in: applyScope,
+            with: remoteEffectiveEntries
+        )
+        let effectiveWishTombstones = wishStore.mergeDeletionTombstones(
+            in: applyScope,
+            with: latestPulledPayload.wishTombstones
+        )
+        let deletedWishIDs = Set(effectiveWishTombstones.map(\.id))
+        let remoteEffectiveWishes = latestPulledPayload.wishes.filter { deletedWishIDs.contains($0.id) == false }
+        wishStore.mergeRemoteWishes(in: applyScope, with: remoteEffectiveWishes)
         anniversaryStore.replaceAnniversaries(in: applyScope, with: latestPulledPayload.anniversaries)
         weeklyTodoStore.replaceItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
         tonightDinnerStore.replaceItems(in: applyScope, with: latestPulledPayload.tonightDinners)
@@ -2777,6 +2907,17 @@ final class AppSyncService: ObservableObject {
         currentStatusStore.replaceStatuses(in: applyScope, with: latestPulledPayload.currentStatuses)
         whisperNoteStore.replaceItems(in: applyScope, with: latestPulledPayload.whisperNotes)
         debugWhisperSync("apply finished space=\(applyScope.spaceId) storeWhisperNotes=\(whisperNoteStore.items(in: applyScope).count)")
+        let localAfterEntries = memoryStore.entries(in: applyScope)
+        let localAfterIDs = Set(localAfterEntries.map(\.id))
+        let removedEntries = localBeforeEntries.filter { localAfterIDs.contains($0.id) == false }
+        if removedEntries.isEmpty == false {
+            debugMemorySync(
+                "apply removed local entries space=\(applyScope.spaceId) removed=\(memoryDebugSummary(removedEntries))"
+            )
+        }
+        debugMemorySync(
+            "apply end space=\(applyScope.spaceId) final=\(memoryDebugSummary(localAfterEntries))"
+        )
 
         lastAppliedAt = .now
         lastAppliedRemoteUpdatedAt = latestPulledPayload.updatedAt
@@ -2972,40 +3113,277 @@ final class AppSyncService: ObservableObject {
         return preferredScope == resolvedScope
     }
 
-    private func shouldAutomaticallyApplyPulledContent(
-        _ payload: SyncContentPayload,
+    var automaticPullHeartbeatSeconds: TimeInterval {
+        automaticPullHeartbeatInterval
+    }
+
+    func schedulePostPushConvergencePullIfPossible(
+        scope: AppContentScope,
+        memoryStore: MemoryStore,
+        wishStore: WishStore,
+        anniversaryStore: AnniversaryStore,
+        weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
+        ritualStore: RitualStore,
+        currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore
+    ) {
+        guard canAttemptAutomaticBackendSync(for: scope) else { return }
+
+        if postPushConvergencePullTask != nil {
+            debugMemorySync("convergence pull cancel previous pending scope=\(scope.spaceId)")
+        }
+        postPushConvergencePullTask?.cancel()
+        debugAutomaticPush(
+            "schedule post-push convergence pull delay=\(String(format: "%.2f", postPushConvergencePullDelay))s"
+        )
+        debugMemorySync(
+            "convergence pull scheduled scope=\(scope.spaceId) delay=\(String(format: "%.2f", postPushConvergencePullDelay))s lastPushedSnapshotUpdatedAt=\(lastPushedSnapshotUpdatedAt?.timeIntervalSince1970.description ?? "nil")"
+        )
+        postPushConvergencePullTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let nanoseconds = UInt64((self.postPushConvergencePullDelay * 1_000_000_000).rounded(.up))
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                debugAutomaticPush("post-push convergence pull cancelled before start")
+                debugMemorySync("convergence pull cancelled before start scope=\(scope.spaceId)")
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            guard self.canAttemptAutomaticBackendSync(for: scope) else {
+                debugAutomaticPush("post-push convergence pull skipped reason=backend sync unavailable")
+                debugMemorySync("convergence pull skipped scope=\(scope.spaceId) reason=backend sync unavailable")
+                return
+            }
+            guard self.isSyncing == false else {
+                debugAutomaticPush("post-push convergence pull skipped reason=sync still running")
+                debugMemorySync("convergence pull skipped scope=\(scope.spaceId) reason=sync still running")
+                return
+            }
+
+            self.lastAutomaticPullAt = nil
+            debugAutomaticPush("perform post-push convergence pull")
+            debugMemorySync("convergence pull execute scope=\(scope.spaceId)")
+            self.scheduleAutomaticPullIfPossible(
+                scope: scope,
+                memoryStore: memoryStore,
+                wishStore: wishStore,
+                anniversaryStore: anniversaryStore,
+                weeklyTodoStore: weeklyTodoStore,
+                tonightDinnerStore: tonightDinnerStore,
+                ritualStore: ritualStore,
+                currentStatusStore: currentStatusStore,
+                whisperNoteStore: whisperNoteStore,
+                trigger: .foregroundHeartbeat
+            )
+        }
+    }
+
+    private func automaticApplyDelayIfPossible(
+        for payload: SyncContentPayload,
         into scope: AppContentScope
-    ) -> Bool {
+    ) -> TimeInterval? {
         guard canAttemptAutomaticBackendSync(for: scope) else {
-            return false
+            return nil
         }
 
         guard payload.scope == relationshipStore.state.contentScope else {
-            return false
+            return nil
         }
 
         if let lastAppliedRemoteUpdatedAt,
            payload.updatedAt <= lastAppliedRemoteUpdatedAt {
-            return false
+            return nil
+        }
+
+        if let staleReason = staleReasonForAutomaticApply(payload) {
+            debugAutomaticPush(
+                "automatic apply rejected stale payload reason=\(staleReason)"
+            )
+            debugMemorySync(
+                "automatic apply rejected stale payload reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
+            )
+            return nil
         }
 
         let now = Date()
+        var requiredDelay: TimeInterval = 0
+        var delayReasons: [String] = []
         if let lastLocalSharedContentMutationAt,
            now.timeIntervalSince(lastLocalSharedContentMutationAt) < automaticApplyLocalMutationCooldown {
-            return false
+            let remaining = automaticApplyLocalMutationCooldown - now.timeIntervalSince(lastLocalSharedContentMutationAt)
+            requiredDelay = max(
+                requiredDelay,
+                remaining
+            )
+            delayReasons.append("recent local mutation cooldown=\(String(format: "%.2f", remaining))s")
         }
 
         if let lastPushAt,
            now.timeIntervalSince(lastPushAt) < automaticApplyRecentPushCooldown {
-            return false
+            let remaining = automaticApplyRecentPushCooldown - now.timeIntervalSince(lastPushAt)
+            requiredDelay = max(
+                requiredDelay,
+                remaining
+            )
+            delayReasons.append("recent push cooldown=\(String(format: "%.2f", remaining))s")
         }
 
         if let suppressedUntil = automaticPushSuppressedUntil,
            suppressedUntil > now {
-            return false
+            let remaining = suppressedUntil.timeIntervalSince(now)
+            requiredDelay = max(requiredDelay, remaining)
+            delayReasons.append("automatic push suppressed=\(String(format: "%.2f", remaining))s")
         }
 
-        return true
+        if delayReasons.isEmpty == false {
+            debugMemorySync(
+                "automatic apply delayed payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) reasons=\(delayReasons.joined(separator: "; "))"
+            )
+        }
+
+        return max(0, requiredDelay)
+    }
+
+    private func scheduleDeferredAutomaticApplyIfPossible(
+        after delay: TimeInterval,
+        payload: SyncContentPayload,
+        scope: AppContentScope,
+        memoryStore: MemoryStore,
+        wishStore: WishStore,
+        anniversaryStore: AnniversaryStore,
+        weeklyTodoStore: WeeklyTodoStore,
+        tonightDinnerStore: TonightDinnerStore,
+        ritualStore: RitualStore,
+        currentStatusStore: CurrentStatusStore,
+        whisperNoteStore: WhisperNoteStore
+    ) {
+        guard delay > 0 else { return }
+        if deferredAutomaticApplyTask != nil {
+            debugMemorySync("deferred apply cancel previous payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)")
+        }
+        deferredAutomaticApplyTask?.cancel()
+        debugMemorySync(
+            "deferred apply scheduled scope=\(scope.spaceId) delay=\(String(format: "%.2f", delay))s payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) memories=\(memoryDebugSummary(payload.memories)) tombstones=\(memoryTombstoneDebugSummary(payload.memoryTombstones))"
+        )
+        deferredAutomaticApplyTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let nanoseconds = UInt64((delay * 1_000_000_000).rounded(.up))
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                debugMemorySync("deferred apply cancelled before execution payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)")
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            guard self.latestPulledPayload?.updatedAt == payload.updatedAt else { return }
+            debugMemorySync("deferred apply wake payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)")
+            if let staleReason = self.staleReasonForAutomaticApply(payload) {
+                debugAutomaticPush(
+                    "deferred automatic apply dropped stale payload reason=\(staleReason)"
+                )
+                debugMemorySync(
+                    "deferred apply dropped stale payload reason=\(staleReason) payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)"
+                )
+                if self.latestPulledPayload?.updatedAt == payload.updatedAt {
+                    self.latestPulledPayload = nil
+                }
+                self.lastDeferredRemoteUpdatedAt = nil
+                return
+            }
+            guard let recheckDelay = self.automaticApplyDelayIfPossible(for: payload, into: scope) else { return }
+            if recheckDelay > 0 {
+                debugMemorySync(
+                    "deferred apply rescheduled payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) delay=\(String(format: "%.2f", recheckDelay))s"
+                )
+                self.scheduleDeferredAutomaticApplyIfPossible(
+                    after: recheckDelay,
+                    payload: payload,
+                    scope: scope,
+                    memoryStore: memoryStore,
+                    wishStore: wishStore,
+                    anniversaryStore: anniversaryStore,
+                    weeklyTodoStore: weeklyTodoStore,
+                    tonightDinnerStore: tonightDinnerStore,
+                    ritualStore: ritualStore,
+                    currentStatusStore: currentStatusStore,
+                    whisperNoteStore: whisperNoteStore
+                )
+                return
+            }
+
+            debugMemorySync("deferred apply execute payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)")
+            let didApply = self.applyLatestPulledContent(
+                to: scope,
+                memoryStore: memoryStore,
+                wishStore: wishStore,
+                anniversaryStore: anniversaryStore,
+                weeklyTodoStore: weeklyTodoStore,
+                tonightDinnerStore: tonightDinnerStore,
+                ritualStore: ritualStore,
+                currentStatusStore: currentStatusStore,
+                whisperNoteStore: whisperNoteStore,
+                eventTextOverride: "已在安全时机自动应用最近共享内容"
+            )
+            if didApply {
+                debugMemorySync("deferred apply finished payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970) result=success")
+                self.lastDeferredRemoteUpdatedAt = nil
+            }
+        }
+    }
+
+    private func shouldTreatPulledPayloadAsStaleForAutomaticApply(
+        _ payload: SyncContentPayload
+    ) -> Bool {
+        staleReasonForAutomaticApply(payload) != nil
+    }
+
+    private func staleReasonForAutomaticApply(_ payload: SyncContentPayload) -> String? {
+        var reasons: [String] = []
+
+        if hasPendingAutomaticPush {
+            reasons.append("hasPendingAutomaticPush")
+        }
+
+        if let lastPushedSnapshotUpdatedAt,
+           payload.updatedAt < lastPushedSnapshotUpdatedAt {
+            reasons.append(
+                "payload older than last successful snapshot (\(payload.updatedAt.timeIntervalSince1970) < \(lastPushedSnapshotUpdatedAt.timeIntervalSince1970))"
+            )
+        }
+
+        return reasons.isEmpty ? nil : reasons.joined(separator: "; ")
+    }
+
+    private func memoryDebugSummary(_ entries: [MemoryTimelineEntry]) -> String {
+        if entries.isEmpty {
+            return "[]"
+        }
+
+        let ids = entries
+            .sorted { $0.updatedAt < $1.updatedAt }
+            .map {
+                "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)"
+            }
+            .joined(separator: ",")
+        return "[\(ids)]"
+    }
+
+    private func memoryTombstoneDebugSummary(_ tombstones: [MemoryDeletionTombstone]) -> String {
+        if tombstones.isEmpty {
+            return "[]"
+        }
+
+        let ids = tombstones
+            .sorted { $0.deletedAt < $1.deletedAt }
+            .map {
+                "\($0.id.uuidString.lowercased())|deletedBy=\($0.deletedByUserId)|deletedAt=\($0.deletedAt.timeIntervalSince1970)"
+            }
+            .joined(separator: ",")
+        return "[\(ids)]"
     }
 
     private func notePendingPulledContentIfNeeded(
@@ -3025,7 +3403,9 @@ final class AppSyncService: ObservableObject {
             latestEventText = "进入“我的”页时发现新的共享内容，可手动应用"
         case .accountSyncAppeared:
             latestEventText = "进入“账号与同步”页时发现新的共享内容，可手动应用"
-        case .memoriesChanged, .wishesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
+        case .foregroundHeartbeat:
+            latestEventText = "发现新的共享内容，正在等待安全时机自动应用"
+        case .memoriesChanged, .wishesChanged, .anniversariesChanged, .weeklyTodosChanged, .tonightDinnersChanged, .ritualsChanged, .currentStatusesChanged, .whisperNotesChanged:
             latestEventText = "发现新的共享内容，可手动应用"
         }
         publishStatus()
@@ -3036,6 +3416,7 @@ private extension AppSyncService {
         memories: [MemoryTimelineEntry],
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
+        wishTombstones: [WishDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
@@ -3055,6 +3436,10 @@ private extension AppSyncService {
         let wishSignature = wishes
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)" }
+            .joined(separator: ",")
+        let wishTombstoneSignature = wishTombstones
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.deletedAt.timeIntervalSince1970)|\($0.deletedByUserId)" }
             .joined(separator: ",")
         let anniversarySignature = anniversaries
             .sorted { $0.id.uuidString < $1.id.uuidString }
@@ -3089,6 +3474,7 @@ private extension AppSyncService {
             memorySignature,
             memoryTombstoneSignature,
             wishSignature,
+            wishTombstoneSignature,
             anniversarySignature,
             weeklyTodoSignature,
             tonightDinnerSignature,
@@ -3104,6 +3490,7 @@ private struct StoredRemotePayload: Codable {
     let memories: [StoredRemoteMemory]
     let memoryTombstones: [StoredRemoteMemoryTombstone]
     let wishes: [StoredRemoteWish]
+    let wishTombstones: [StoredRemoteWishTombstone]
     let anniversaries: [StoredRemoteAnniversary]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
     let tonightDinners: [StoredRemoteTonightDinner]
@@ -3118,6 +3505,7 @@ private struct StoredRemotePayload: Codable {
         case memories
         case memoryTombstones
         case wishes
+        case wishTombstones
         case anniversaries
         case weeklyTodos
         case tonightDinners
@@ -3133,6 +3521,7 @@ private struct StoredRemotePayload: Codable {
         memories = payload.memories.map(StoredRemoteMemory.init)
         memoryTombstones = payload.memoryTombstones.map(StoredRemoteMemoryTombstone.init)
         wishes = payload.wishes.map(StoredRemoteWish.init)
+        wishTombstones = payload.wishTombstones.map(StoredRemoteWishTombstone.init)
         anniversaries = payload.anniversaries.map(StoredRemoteAnniversary.init)
         weeklyTodos = payload.weeklyTodos.map(StoredRemoteWeeklyTodo.init)
         tonightDinners = payload.tonightDinners.map(StoredRemoteTonightDinner.init)
@@ -3149,6 +3538,7 @@ private struct StoredRemotePayload: Codable {
         memories = try container.decodeIfPresent([StoredRemoteMemory].self, forKey: .memories) ?? []
         memoryTombstones = try container.decodeIfPresent([StoredRemoteMemoryTombstone].self, forKey: .memoryTombstones) ?? []
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
+        wishTombstones = try container.decodeIfPresent([StoredRemoteWishTombstone].self, forKey: .wishTombstones) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
         tonightDinners = try container.decodeIfPresent([StoredRemoteTonightDinner].self, forKey: .tonightDinners) ?? []
@@ -3181,6 +3571,7 @@ private struct StoredRemotePayload: Codable {
             memories: memories.map(\.model),
             memoryTombstones: memoryTombstones.map(\.model),
             wishes: wishes.map(\.model),
+            wishTombstones: wishTombstones.map(\.model),
             anniversaries: anniversaries.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
             tonightDinners: tonightDinners.map(\.model),
@@ -3341,6 +3732,29 @@ private struct StoredRemoteWish: Codable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
+        )
+    }
+}
+
+private struct StoredRemoteWishTombstone: Codable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(_ tombstone: WishDeletionTombstone) {
+        id = tombstone.id
+        spaceId = tombstone.spaceId
+        deletedByUserId = tombstone.deletedByUserId
+        deletedAt = tombstone.deletedAt
+    }
+
+    var model: WishDeletionTombstone {
+        WishDeletionTombstone(
+            id: id,
+            spaceId: spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
         )
     }
 }

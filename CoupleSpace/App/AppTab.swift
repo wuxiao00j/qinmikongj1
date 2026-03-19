@@ -2,6 +2,14 @@ import Combine
 import Foundation
 import UIKit
 
+#if DEBUG
+private func debugMemoryStore(_ message: @autoclosure () -> String) {
+    print("[MemoryStore] \(message())")
+}
+#else
+private func debugMemoryStore(_ message: @autoclosure () -> String) {}
+#endif
+
 enum AppTab: Hashable {
     case home
     case life
@@ -67,7 +75,11 @@ final class MemoryStore: ObservableObject {
     }
 
     func add(_ entry: MemoryTimelineEntry, in scope: AppContentScope) {
-        entries.append(entry.preparedForLocalInsert(in: scope))
+        let preparedEntry = entry.preparedForLocalInsert(in: scope)
+        debugMemoryStore(
+            "local add id=\(preparedEntry.id.uuidString.lowercased()) user=\(preparedEntry.createdByUserId) space=\(preparedEntry.spaceId) updatedAt=\(preparedEntry.updatedAt.timeIntervalSince1970)"
+        )
+        entries.append(preparedEntry)
         entries.sort { $0.date > $1.date }
         save()
     }
@@ -91,6 +103,9 @@ final class MemoryStore: ObservableObject {
             scope: scope
         )
 
+        debugMemoryStore(
+            "local update id=\(updatedEntry.id.uuidString.lowercased()) user=\(updatedEntry.createdByUserId) space=\(updatedEntry.spaceId) updatedAt=\(updatedEntry.updatedAt.timeIntervalSince1970)"
+        )
         entries[index] = updatedEntry
         entries.sort { $0.date > $1.date }
 
@@ -106,6 +121,9 @@ final class MemoryStore: ObservableObject {
             return
         }
 
+        debugMemoryStore(
+            "local delete id=\(existingEntry.id.uuidString.lowercased()) user=\(existingEntry.createdByUserId) space=\(existingEntry.spaceId) updatedAt=\(existingEntry.updatedAt.timeIntervalSince1970)"
+        )
         entries.removeAll { $0.id == entryID && $0.matches(scope: scope) }
         upsertDeletionTombstone(
             MemoryDeletionTombstone(
@@ -121,10 +139,14 @@ final class MemoryStore: ObservableObject {
 
     func replaceEntries(in scope: AppContentScope, with importedEntries: [MemoryTimelineEntry]) {
         let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        let localBeforeEntries = entries.filter { $0.matches(scope: scope) }
         let existingEntriesByID = Dictionary(
             uniqueKeysWithValues: entries
                 .filter { $0.matches(scope: scope) }
                 .map { ($0.id, $0) }
+        )
+        debugMemoryStore(
+            "replace begin space=\(scope.spaceId) localBefore=\(localBeforeEntries.map { $0.id.uuidString.lowercased() }.joined(separator: ",")) imported=\(importedEntries.map { $0.id.uuidString.lowercased() }.joined(separator: ",")) deleted=\(deletedIDs.map { $0.uuidString.lowercased() }.sorted().joined(separator: ","))"
         )
         entries.removeAll { $0.matches(scope: scope) }
         entries.append(
@@ -136,6 +158,83 @@ final class MemoryStore: ObservableObject {
             }
         )
         entries.sort { $0.date > $1.date }
+        let localAfterEntries = entries.filter { $0.matches(scope: scope) }
+        let localAfterIDs = Set(localAfterEntries.map(\.id))
+        let removedEntries = localBeforeEntries.filter { localAfterIDs.contains($0.id) == false }
+        if removedEntries.isEmpty == false {
+            let removedSummary = removedEntries.map {
+                "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)"
+            }.joined(separator: ",")
+            debugMemoryStore(
+                "replace removed space=\(scope.spaceId) ids=\(removedSummary)"
+            )
+        }
+        debugMemoryStore(
+            "replace end space=\(scope.spaceId) localAfter=\(localAfterEntries.map { $0.id.uuidString.lowercased() }.joined(separator: ","))"
+        )
+        save()
+    }
+
+    func mergeRemoteEntries(in scope: AppContentScope, with importedEntries: [MemoryTimelineEntry]) {
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        let localBeforeEntries = entries.filter { $0.matches(scope: scope) }
+        let localBeforeByID = Dictionary(uniqueKeysWithValues: localBeforeEntries.map { ($0.id, $0) })
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: localBeforeEntries
+                .filter { deletedIDs.contains($0.id) == false }
+                .map { ($0.id, $0) }
+        )
+
+        debugMemoryStore(
+            "merge remote begin space=\(scope.spaceId) localBefore=\(localBeforeEntries.map { $0.id.uuidString.lowercased() }.joined(separator: ",")) imported=\(importedEntries.map { $0.id.uuidString.lowercased() }.joined(separator: ",")) deleted=\(deletedIDs.map { $0.uuidString.lowercased() }.sorted().joined(separator: ","))"
+        )
+
+        for importedEntry in importedEntries {
+            guard deletedIDs.contains(importedEntry.id) == false else { continue }
+
+            let preparedEntry = importedEntry.preparedForScopeReplacement(
+                in: scope,
+                preservingLocalImageMetadataFrom: localBeforeByID[importedEntry.id]
+            )
+
+            if let existingEntry = mergedByID[preparedEntry.id] {
+                if existingEntry.updatedAt > preparedEntry.updatedAt {
+                    debugMemoryStore(
+                        "merge remote keep newer local space=\(scope.spaceId) id=\(existingEntry.id.uuidString.lowercased()) localUpdatedAt=\(existingEntry.updatedAt.timeIntervalSince1970) remoteUpdatedAt=\(preparedEntry.updatedAt.timeIntervalSince1970)"
+                    )
+                    continue
+                }
+
+                debugMemoryStore(
+                    "merge remote upsert space=\(scope.spaceId) id=\(preparedEntry.id.uuidString.lowercased()) localUpdatedAt=\(existingEntry.updatedAt.timeIntervalSince1970) remoteUpdatedAt=\(preparedEntry.updatedAt.timeIntervalSince1970)"
+                )
+            } else {
+                debugMemoryStore(
+                    "merge remote insert space=\(scope.spaceId) id=\(preparedEntry.id.uuidString.lowercased()) remoteUpdatedAt=\(preparedEntry.updatedAt.timeIntervalSince1970)"
+                )
+            }
+
+            mergedByID[preparedEntry.id] = preparedEntry
+        }
+
+        entries.removeAll { $0.matches(scope: scope) }
+        entries.append(contentsOf: mergedByID.values)
+        entries.sort { $0.date > $1.date }
+
+        let localAfterEntries = entries.filter { $0.matches(scope: scope) }
+        let localAfterIDs = Set(localAfterEntries.map(\.id))
+        let removedEntries = localBeforeEntries.filter { localAfterIDs.contains($0.id) == false }
+        if removedEntries.isEmpty == false {
+            let removedSummary = removedEntries.map {
+                "\($0.id.uuidString.lowercased())|user=\($0.createdByUserId)|updatedAt=\($0.updatedAt.timeIntervalSince1970)"
+            }.joined(separator: ",")
+            debugMemoryStore(
+                "merge remote removed space=\(scope.spaceId) ids=\(removedSummary)"
+            )
+        }
+        debugMemoryStore(
+            "merge remote end space=\(scope.spaceId) localAfter=\(localAfterEntries.map { $0.id.uuidString.lowercased() }.joined(separator: ","))"
+        )
         save()
     }
 
@@ -163,6 +262,9 @@ final class MemoryStore: ObservableObject {
         let deletedIDs = Set(mergedTombstones.map(\.id))
         let removedEntries = entries.filter { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
         if removedEntries.isEmpty == false {
+            debugMemoryStore(
+                "merge tombstones removed entries space=\(scope.spaceId) tombstones=\(mergedTombstones.map { $0.id.uuidString.lowercased() }.joined(separator: ",")) removed=\(removedEntries.map { $0.id.uuidString.lowercased() }.joined(separator: ","))"
+            )
             removedEntries.forEach { MemoryPhotoStorage.deleteImage(for: $0.photoFilename) }
             entries.removeAll { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
             entries.sort { $0.date > $1.date }
@@ -275,9 +377,11 @@ final class MemoryStore: ObservableObject {
 @MainActor
 final class WishStore: ObservableObject {
     @Published private(set) var wishes: [PlaceWish] = []
+    @Published private(set) var deletionTombstones: [WishDeletionTombstone] = []
 
     private let defaults: UserDefaults
     private let storageKey = "com.barry.CoupleSpace.placeWishes"
+    private let deletionStorageKey = "com.barry.CoupleSpace.placeWishDeletionTombstones"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -285,12 +389,13 @@ final class WishStore: ObservableObject {
     }
 
     var hasPersistedWishes: Bool {
-        !wishes.isEmpty
+        !wishes.isEmpty || !deletionTombstones.isEmpty
     }
 
     func wishes(in scope: AppContentScope) -> [PlaceWish] {
-        wishes
-            .filter { $0.matches(scope: scope) }
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        return wishes
+            .filter { $0.matches(scope: scope) && deletedIDs.contains($0.id) == false }
             .sorted { lhs, rhs in
                 if lhs.status == rhs.status {
                     return lhs.title < rhs.title
@@ -298,6 +403,12 @@ final class WishStore: ObservableObject {
 
                 return lhs.status.sortOrder < rhs.status.sortOrder
             }
+    }
+
+    func deletionTombstones(in scope: AppContentScope) -> [WishDeletionTombstone] {
+        deletionTombstones
+            .filter { $0.matches(scope: scope) }
+            .sorted { $0.deletedAt > $1.deletedAt }
     }
 
     func add(_ wish: PlaceWish, in scope: AppContentScope) {
@@ -324,16 +435,78 @@ final class WishStore: ObservableObject {
     }
 
     func delete(_ wishID: UUID, in scope: AppContentScope) {
-        let originalCount = wishes.count
+        guard wishes.contains(where: { $0.id == wishID && $0.matches(scope: scope) }) else {
+            return
+        }
         wishes.removeAll { $0.id == wishID && $0.matches(scope: scope) }
-        guard wishes.count != originalCount else { return }
+        upsertDeletionTombstone(
+            WishDeletionTombstone(
+                id: wishID,
+                spaceId: scope.spaceId,
+                deletedByUserId: scope.currentUserId
+            ),
+            in: scope
+        )
         save()
     }
 
     func replaceWishes(in scope: AppContentScope, with importedWishes: [PlaceWish]) {
         wishes.removeAll { $0.matches(scope: scope) }
+        deletionTombstones.removeAll { $0.matches(scope: scope) }
         wishes.append(contentsOf: importedWishes.map { $0.preparedForScopeReplacement(in: scope) })
         save()
+    }
+
+    func mergeRemoteWishes(in scope: AppContentScope, with importedWishes: [PlaceWish]) {
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        let localScopedWishes = wishes.filter { $0.matches(scope: scope) }
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: localScopedWishes
+                .filter { deletedIDs.contains($0.id) == false }
+                .map { ($0.id, $0) }
+        )
+
+        for importedWish in importedWishes {
+            guard deletedIDs.contains(importedWish.id) == false else { continue }
+
+            let preparedWish = importedWish.preparedForScopeReplacement(in: scope)
+            if let existingWish = mergedByID[preparedWish.id],
+               existingWish.updatedAt > preparedWish.updatedAt {
+                continue
+            }
+            mergedByID[preparedWish.id] = preparedWish
+        }
+
+        wishes.removeAll { $0.matches(scope: scope) }
+        wishes.append(contentsOf: mergedByID.values)
+        save()
+    }
+
+    @discardableResult
+    func mergeDeletionTombstones(
+        in scope: AppContentScope,
+        with importedTombstones: [WishDeletionTombstone]
+    ) -> [WishDeletionTombstone] {
+        let keptTombstones = deletionTombstones.filter { !$0.matches(scope: scope) }
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: deletionTombstones(in: scope).map { ($0.id, $0) }
+        )
+
+        for tombstone in importedTombstones {
+            guard tombstone.matches(scope: scope) else { continue }
+            if let existing = mergedByID[tombstone.id], existing.deletedAt >= tombstone.deletedAt {
+                continue
+            }
+            mergedByID[tombstone.id] = tombstone.preparedForScopeReplacement(in: scope)
+        }
+
+        let mergedTombstones = mergedByID.values.sorted { $0.deletedAt > $1.deletedAt }
+        deletionTombstones = keptTombstones + mergedTombstones
+
+        let deletedIDs = Set(mergedTombstones.map(\.id))
+        wishes.removeAll { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
+        save()
+        return mergedTombstones
     }
 
     private func load() {
@@ -350,6 +523,7 @@ final class WishStore: ObservableObject {
         } catch {
             wishes = []
         }
+        loadDeletionTombstones()
     }
 
     private func save() {
@@ -358,9 +532,44 @@ final class WishStore: ObservableObject {
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(wishes.map { StoredWish(wish: $0) })
             defaults.set(data, forKey: storageKey)
+            let tombstoneData = try encoder.encode(
+                deletionTombstones.map { StoredWishDeletionTombstone(tombstone: $0) }
+            )
+            defaults.set(tombstoneData, forKey: deletionStorageKey)
         } catch {
             assertionFailure("Failed to save wishes: \(error)")
         }
+    }
+
+    private func loadDeletionTombstones() {
+        guard let data = defaults.data(forKey: deletionStorageKey) else {
+            deletionTombstones = []
+            return
+        }
+
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let decoded = try decoder.decode([StoredWishDeletionTombstone].self, from: data)
+            deletionTombstones = decoded
+                .map(\.model)
+                .sorted { $0.deletedAt > $1.deletedAt }
+        } catch {
+            deletionTombstones = []
+        }
+    }
+
+    private func upsertDeletionTombstone(_ tombstone: WishDeletionTombstone, in scope: AppContentScope) {
+        let preparedTombstone = tombstone.preparedForScopeReplacement(in: scope)
+        if let index = deletionTombstones.firstIndex(where: { $0.id == preparedTombstone.id && $0.matches(scope: scope) }) {
+            if deletionTombstones[index].deletedAt >= preparedTombstone.deletedAt {
+                return
+            }
+            deletionTombstones[index] = preparedTombstone
+        } else {
+            deletionTombstones.append(preparedTombstone)
+        }
+        deletionTombstones.sort { $0.deletedAt > $1.deletedAt }
     }
 }
 
@@ -587,7 +796,6 @@ final class TonightDinnerStore: ObservableObject {
     func items(in scope: AppContentScope) -> [TonightDinnerOption] {
         self.items
             .filter { $0.matches(scope: scope) }
-            .map { $0.normalizedForCurrentDay() }
             .sorted(by: Self.compareItems(_:_:))
     }
 
@@ -599,6 +807,8 @@ final class TonightDinnerStore: ObservableObject {
 
     func choose(_ itemID: UUID, in scope: AppContentScope) {
         var didMutate = false
+        let calendar = Calendar.current
+        let now = Date()
 
         items = items.map { item in
             guard item.matches(scope: scope) else { return item }
@@ -608,7 +818,9 @@ final class TonightDinnerStore: ObservableObject {
                 return item.preparedForSelectionMutation(status: .chosen, scope: scope)
             }
 
-            if item.status == .chosen {
+            if item.status == .chosen,
+               let decidedAt = item.decidedAt,
+               calendar.isDate(decidedAt, inSameDayAs: now) {
                 didMutate = true
                 return item.preparedForSelectionMutation(status: .candidate, scope: scope)
             }
@@ -704,7 +916,27 @@ final class RitualStore: ObservableObject {
     func items(in scope: AppContentScope) -> [RitualItem] {
         self.items
             .filter { $0.matches(scope: scope) }
+            .map { $0.normalizedForCurrentDay() }
             .sorted(by: Self.compareItems(_:_:))
+    }
+
+    func refreshCompletionStatesIfNeeded(
+        in scope: AppContentScope,
+        referenceDate: Date = .now
+    ) {
+        var didMutate = false
+
+        items = items.map { item in
+            guard item.matches(scope: scope) else { return item }
+            guard item.needsCompletionReset(referenceDate: referenceDate) else { return item }
+
+            didMutate = true
+            return item.normalizedForCurrentDay(referenceDate: referenceDate)
+        }
+
+        guard didMutate else { return }
+        items.sort(by: Self.compareItems(_:_:))
+        save()
     }
 
     func add(_ item: RitualItem, in scope: AppContentScope) {
@@ -1240,6 +1472,29 @@ private struct StoredWish: Codable {
     }
 }
 
+private struct StoredWishDeletionTombstone: Codable {
+    let id: UUID
+    let spaceId: String?
+    let deletedByUserId: String?
+    let deletedAt: Date?
+
+    init(tombstone: WishDeletionTombstone) {
+        id = tombstone.id
+        spaceId = tombstone.spaceId
+        deletedByUserId = tombstone.deletedByUserId
+        deletedAt = tombstone.deletedAt
+    }
+
+    var model: WishDeletionTombstone {
+        WishDeletionTombstone(
+            id: id,
+            spaceId: spaceId ?? AppDataDefaults.localSpaceId,
+            deletedByUserId: deletedByUserId ?? AppDataDefaults.localUserId,
+            deletedAt: deletedAt ?? .now
+        )
+    }
+}
+
 private struct StoredAnniversary: Codable {
     let id: UUID
     let title: String
@@ -1332,6 +1587,7 @@ private struct StoredRitualItem: Codable {
     let title: String
     let kindRawValue: String?
     let isCompleted: Bool
+    let completedAt: Date?
     let note: String?
     let createdAt: Date?
     let updatedAt: Date?
@@ -1344,6 +1600,7 @@ private struct StoredRitualItem: Codable {
         title = item.title
         kindRawValue = item.kind.rawValue
         isCompleted = item.isCompleted
+        completedAt = item.completedAt
         note = item.note
         createdAt = item.createdAt
         updatedAt = item.updatedAt
@@ -1359,6 +1616,7 @@ private struct StoredRitualItem: Codable {
             title: title,
             kind: RitualKind(rawValue: kindRawValue ?? "") ?? .promise,
             isCompleted: isCompleted,
+            completedAt: completedAt ?? (isCompleted ? (updatedAt ?? resolvedCreatedAt) : nil),
             note: note ?? "",
             createdAt: resolvedCreatedAt,
             updatedAt: updatedAt ?? resolvedCreatedAt,
@@ -1605,7 +1863,7 @@ private extension MemoryDeletionTombstone {
 
 private extension PlaceWish {
     func matches(scope: AppContentScope) -> Bool {
-        spaceId == scope.spaceId || (scope.isSharedSpace && spaceId == AppDataDefaults.localSpaceId)
+        spaceId == scope.spaceId
     }
 
     func preparedForLocalInsert(in scope: AppContentScope) -> PlaceWish {
@@ -1686,6 +1944,21 @@ private extension PlaceWish {
             createdAt: createdAt,
             updatedAt: .now,
             syncStatus: .localOnly
+        )
+    }
+}
+
+private extension WishDeletionTombstone {
+    func matches(scope: AppContentScope) -> Bool {
+        spaceId == scope.spaceId
+    }
+
+    func preparedForScopeReplacement(in scope: AppContentScope) -> WishDeletionTombstone {
+        WishDeletionTombstone(
+            id: id,
+            spaceId: scope.spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
         )
     }
 }
@@ -1882,6 +2155,7 @@ private extension RitualItem {
             title: title,
             kind: kind,
             isCompleted: false,
+            completedAt: nil,
             note: note,
             createdAt: createdAt,
             updatedAt: .now,
@@ -1910,6 +2184,7 @@ private extension RitualItem {
             title: title,
             kind: kind,
             isCompleted: isCompleted,
+            completedAt: isCompleted ? .now : nil,
             note: note,
             createdAt: createdAt,
             updatedAt: .now,
@@ -1940,6 +2215,7 @@ private extension RitualItem {
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             kind: kind,
             isCompleted: isCompleted,
+            completedAt: completedAt,
             note: note.trimmingCharacters(in: .whitespacesAndNewlines),
             createdAt: createdAt,
             updatedAt: .now,
@@ -1955,6 +2231,7 @@ private extension RitualItem {
             title: title,
             kind: kind,
             isCompleted: isCompleted,
+            completedAt: completedAt,
             note: note,
             createdAt: createdAt,
             updatedAt: updatedAt,
@@ -1963,26 +2240,33 @@ private extension RitualItem {
             syncStatus: syncStatus
         )
     }
-}
 
-private extension TonightDinnerOption {
-    func normalizedForCurrentDay(referenceDate: Date = .now) -> TonightDinnerOption {
-        guard status == .chosen, let decidedAt else { return self }
-        guard !Calendar.current.isDate(decidedAt, inSameDayAs: referenceDate) else { return self }
+    func needsCompletionReset(referenceDate: Date = .now) -> Bool {
+        guard isCompleted else { return false }
+        guard let completedAt else { return true }
+        return !Calendar.current.isDate(completedAt, inSameDayAs: referenceDate)
+    }
 
-        return TonightDinnerOption(
+    func normalizedForCurrentDay(referenceDate: Date = .now) -> RitualItem {
+        guard needsCompletionReset(referenceDate: referenceDate) else { return self }
+
+        return RitualItem(
             id: id,
             title: title,
+            kind: kind,
+            isCompleted: false,
+            completedAt: nil,
             note: note,
-            status: .candidate,
             createdAt: createdAt,
-            decidedAt: nil,
+            updatedAt: updatedAt,
             createdByUserId: createdByUserId,
             spaceId: spaceId,
             syncStatus: syncStatus
         )
     }
+}
 
+private extension TonightDinnerOption {
     func matches(scope: AppContentScope) -> Bool {
         spaceId == scope.spaceId || (scope.isSharedSpace && spaceId == AppDataDefaults.localSpaceId)
     }

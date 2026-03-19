@@ -25,6 +25,7 @@ struct HomeCouple {
     let second: HomePartner
     let sinceText: String
     let relationshipDays: Int
+    let relationshipDurationText: String
     let note: String
 }
 
@@ -168,6 +169,7 @@ enum AnniversaryCategory: String, CaseIterable {
     case birthday = "生日"
     case travel = "旅行"
     case milestone = "里程碑"
+    case countdown = "倒计时"
     case custom = "纪念日"
 
     var symbol: String {
@@ -180,6 +182,8 @@ enum AnniversaryCategory: String, CaseIterable {
             return "tram.fill"
         case .milestone:
             return "sparkles"
+        case .countdown:
+            return "hourglass"
         case .custom:
             return "calendar"
         }
@@ -189,6 +193,15 @@ enum AnniversaryCategory: String, CaseIterable {
 enum AnniversaryCadence: String, Codable {
     case once
     case yearly
+
+    var label: String {
+        switch self {
+        case .once:
+            return "只记住这一次"
+        case .yearly:
+            return "每年提醒"
+        }
+    }
 }
 
 struct AnniversaryItem: Identifiable {
@@ -670,6 +683,25 @@ struct PlaceWish: Identifiable {
     }
 }
 
+struct WishDeletionTombstone: Identifiable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(
+        id: UUID,
+        spaceId: String = AppDataDefaults.localSpaceId,
+        deletedByUserId: String = AppDataDefaults.localUserId,
+        deletedAt: Date = .now
+    ) {
+        self.id = id
+        self.spaceId = spaceId
+        self.deletedByUserId = deletedByUserId
+        self.deletedAt = deletedAt
+    }
+}
+
 enum WishStatus: String, CaseIterable, Identifiable {
     case dreaming = "想做"
     case planning = "计划中"
@@ -772,6 +804,7 @@ struct RitualItem: Identifiable {
     let title: String
     let kind: RitualKind
     let isCompleted: Bool
+    let completedAt: Date?
     let note: String
     let createdAt: Date
     let updatedAt: Date
@@ -784,6 +817,7 @@ struct RitualItem: Identifiable {
         title: String,
         kind: RitualKind,
         isCompleted: Bool = false,
+        completedAt: Date? = nil,
         note: String = "",
         createdAt: Date = .now,
         updatedAt: Date? = nil,
@@ -791,13 +825,21 @@ struct RitualItem: Identifiable {
         spaceId: String = AppDataDefaults.localSpaceId,
         syncStatus: SyncStatus = .localOnly
     ) {
+        let resolvedUpdatedAt = updatedAt ?? createdAt
         self.id = id
         self.title = title
         self.kind = kind
         self.isCompleted = isCompleted
+        if let completedAt {
+            self.completedAt = completedAt
+        } else if isCompleted {
+            self.completedAt = resolvedUpdatedAt
+        } else {
+            self.completedAt = nil
+        }
         self.note = note
         self.createdAt = createdAt
-        self.updatedAt = updatedAt ?? createdAt
+        self.updatedAt = resolvedUpdatedAt
         self.createdByUserId = createdByUserId
         self.spaceId = spaceId
         self.syncStatus = syncStatus
