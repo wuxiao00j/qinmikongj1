@@ -3613,7 +3613,18 @@ private extension AppSyncService {
             .joined(separator: ",")
         let wishSignature = wishes
             .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)" }
+            .map {
+                [
+                    $0.id.uuidString,
+                    String($0.updatedAt.timeIntervalSince1970),
+                    String($0.titleUpdatedAt.timeIntervalSince1970),
+                    String($0.detailUpdatedAt.timeIntervalSince1970),
+                    String($0.noteUpdatedAt.timeIntervalSince1970),
+                    String($0.categoryUpdatedAt.timeIntervalSince1970),
+                    String($0.statusUpdatedAt.timeIntervalSince1970),
+                    String($0.targetTextUpdatedAt.timeIntervalSince1970)
+                ].joined(separator: "|")
+            }
             .joined(separator: ",")
         let wishTombstoneSignature = wishTombstones
             .sorted { $0.id.uuidString < $1.id.uuidString }
@@ -3867,11 +3878,17 @@ private struct StoredRemoteMemoryTombstone: Codable {
 private struct StoredRemoteWish: Codable {
     let id: UUID
     let title: String
+    let titleUpdatedAt: Date?
     let detail: String
+    let detailUpdatedAt: Date?
     let note: String
+    let noteUpdatedAt: Date?
     let categoryRawValue: String
+    let categoryUpdatedAt: Date?
     let statusRawValue: String
+    let statusUpdatedAt: Date?
     let targetText: String
+    let targetTextUpdatedAt: Date?
     let symbol: String
     let spaceId: String
     let createdByUserId: String
@@ -3883,11 +3900,17 @@ private struct StoredRemoteWish: Codable {
     init(_ wish: PlaceWish) {
         id = wish.id
         title = wish.title
+        titleUpdatedAt = wish.titleUpdatedAt
         detail = wish.detail
+        detailUpdatedAt = wish.detailUpdatedAt
         note = wish.note
+        noteUpdatedAt = wish.noteUpdatedAt
         categoryRawValue = wish.category.rawValue
+        categoryUpdatedAt = wish.categoryUpdatedAt
         statusRawValue = wish.status.rawValue
+        statusUpdatedAt = wish.statusUpdatedAt
         targetText = wish.targetText
+        targetTextUpdatedAt = wish.targetTextUpdatedAt
         symbol = wish.symbol
         spaceId = wish.spaceId
         createdByUserId = wish.createdByUserId
@@ -3902,11 +3925,17 @@ private struct StoredRemoteWish: Codable {
         return PlaceWish(
             id: id,
             title: title,
+            titleUpdatedAt: titleUpdatedAt,
             detail: detail,
+            detailUpdatedAt: detailUpdatedAt,
             note: note,
+            noteUpdatedAt: noteUpdatedAt,
             category: WishCategory(rawValue: categoryRawValue) ?? .date,
+            categoryUpdatedAt: categoryUpdatedAt,
             status: WishStatus(rawValue: statusRawValue) ?? .dreaming,
+            statusUpdatedAt: statusUpdatedAt,
             targetText: targetText,
+            targetTextUpdatedAt: targetTextUpdatedAt,
             symbol: symbol,
             spaceId: spaceId,
             createdByUserId: createdByUserId,

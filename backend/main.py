@@ -174,11 +174,17 @@ class StoredRemoteWishModel(BaseModel):
 
     id: str
     title: str
+    titleUpdatedAt: datetime | None = None
     detail: str
+    detailUpdatedAt: datetime | None = None
     note: str
+    noteUpdatedAt: datetime | None = None
     categoryRawValue: str
+    categoryUpdatedAt: datetime | None = None
     statusRawValue: str
+    statusUpdatedAt: datetime | None = None
     targetText: str
+    targetTextUpdatedAt: datetime | None = None
     symbol: str
     spaceId: str
     createdByUserId: str
@@ -783,6 +789,108 @@ def wish_updated_at_value(wish: StoredRemoteWishModel) -> float:
     return wish.updatedAtTimestamp if wish.updatedAtTimestamp is not None else wish.updatedAt.timestamp()
 
 
+def wish_field_updated_at_value(wish: StoredRemoteWishModel, field_name: str) -> float:
+    field_value = getattr(wish, field_name)
+    if field_value is None:
+        return wish_updated_at_value(wish)
+    return field_value.timestamp()
+
+
+def resolve_wish_field(
+    existing_wish: StoredRemoteWishModel,
+    incoming_wish: StoredRemoteWishModel,
+    *,
+    value_fields: tuple[str, ...],
+    updated_at_field: str,
+) -> tuple[tuple[Any, ...], datetime]:
+    existing_updated_at = wish_field_updated_at_value(existing_wish, updated_at_field)
+    incoming_updated_at = wish_field_updated_at_value(incoming_wish, updated_at_field)
+    if incoming_updated_at > existing_updated_at:
+        source_wish = incoming_wish
+    elif incoming_updated_at < existing_updated_at:
+        source_wish = existing_wish
+    elif wish_updated_at_value(incoming_wish) > wish_updated_at_value(existing_wish):
+        source_wish = incoming_wish
+    else:
+        source_wish = existing_wish
+    resolved_values = tuple(getattr(source_wish, field_name) for field_name in value_fields)
+    resolved_updated_at = getattr(source_wish, updated_at_field) or source_wish.updatedAt
+    return resolved_values, resolved_updated_at
+
+
+def merge_wish_models(
+    existing_wish: StoredRemoteWishModel,
+    incoming_wish: StoredRemoteWishModel,
+) -> StoredRemoteWishModel:
+    base_wish = incoming_wish if wish_updated_at_value(incoming_wish) > wish_updated_at_value(existing_wish) else existing_wish
+    title_value, title_updated_at = resolve_wish_field(
+        existing_wish,
+        incoming_wish,
+        value_fields=("title",),
+        updated_at_field="titleUpdatedAt",
+    )
+    detail_value, detail_updated_at = resolve_wish_field(
+        existing_wish,
+        incoming_wish,
+        value_fields=("detail",),
+        updated_at_field="detailUpdatedAt",
+    )
+    note_value, note_updated_at = resolve_wish_field(
+        existing_wish,
+        incoming_wish,
+        value_fields=("note",),
+        updated_at_field="noteUpdatedAt",
+    )
+    category_values, category_updated_at = resolve_wish_field(
+        existing_wish,
+        incoming_wish,
+        value_fields=("categoryRawValue", "symbol"),
+        updated_at_field="categoryUpdatedAt",
+    )
+    status_value, status_updated_at = resolve_wish_field(
+        existing_wish,
+        incoming_wish,
+        value_fields=("statusRawValue",),
+        updated_at_field="statusUpdatedAt",
+    )
+    target_text_value, target_text_updated_at = resolve_wish_field(
+        existing_wish,
+        incoming_wish,
+        value_fields=("targetText",),
+        updated_at_field="targetTextUpdatedAt",
+    )
+    merged_updated_at = max(
+        existing_wish.updatedAt,
+        incoming_wish.updatedAt,
+        title_updated_at,
+        detail_updated_at,
+        note_updated_at,
+        category_updated_at,
+        status_updated_at,
+        target_text_updated_at,
+    )
+    return base_wish.model_copy(
+        update={
+            "title": title_value[0],
+            "titleUpdatedAt": title_updated_at,
+            "detail": detail_value[0],
+            "detailUpdatedAt": detail_updated_at,
+            "note": note_value[0],
+            "noteUpdatedAt": note_updated_at,
+            "categoryRawValue": category_values[0],
+            "symbol": category_values[1],
+            "categoryUpdatedAt": category_updated_at,
+            "statusRawValue": status_value[0],
+            "statusUpdatedAt": status_updated_at,
+            "targetText": target_text_value[0],
+            "targetTextUpdatedAt": target_text_updated_at,
+            "createdAt": min(existing_wish.createdAt, incoming_wish.createdAt),
+            "updatedAt": merged_updated_at,
+            "updatedAtTimestamp": merged_updated_at.timestamp(),
+        }
+    )
+
+
 def merge_wish_snapshot_state(
     existing_snapshot: SnapshotRecordModel | None,
     incoming_snapshot: SnapshotRecordModel,
@@ -808,16 +916,20 @@ def merge_wish_snapshot_state(
     for wish in incoming_snapshot.wishes:
         existing_wish = merged_wishes_by_id.get(wish.id)
         if existing_wish is not None:
+            merged_wish = merge_wish_models(existing_wish, wish)
             logger.info(
-                "snapshot wish conflict id=%s existing_updated_at=%s incoming_updated_at=%s existing_category=%s incoming_category=%s",
+                "snapshot wish conflict id=%s existing_updated_at=%s incoming_updated_at=%s merged_updated_at=%s existing_category=%s incoming_category=%s merged_category=%s",
                 wish.id,
                 wish_updated_at_value(existing_wish),
                 wish_updated_at_value(wish),
+                wish_updated_at_value(merged_wish),
                 existing_wish.categoryRawValue,
                 wish.categoryRawValue,
+                merged_wish.categoryRawValue,
             )
-        if existing_wish is None or wish_updated_at_value(wish) >= wish_updated_at_value(existing_wish):
-            merged_wishes_by_id[wish.id] = wish
+            merged_wishes_by_id[wish.id] = merged_wish
+            continue
+        merged_wishes_by_id[wish.id] = wish
 
     merged_tombstones = sorted(
         merged_tombstones_by_id.values(),

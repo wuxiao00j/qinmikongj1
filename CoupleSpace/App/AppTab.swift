@@ -51,6 +51,33 @@ private func makeWishStoreJSONEncoder() -> JSONEncoder {
     return encoder
 }
 
+private func wishFieldResolutionTime(_ explicitDate: Date?, fallback wish: PlaceWish) -> Date {
+    explicitDate ?? wish.updatedAt
+}
+
+private func resolveWishField<Value>(
+    localValue: Value,
+    localUpdatedAt: Date,
+    remoteValue: Value,
+    remoteUpdatedAt: Date,
+    localWish: PlaceWish,
+    remoteWish: PlaceWish
+) -> (Value, Date) {
+    if remoteUpdatedAt > localUpdatedAt {
+        return (remoteValue, remoteUpdatedAt)
+    }
+    if remoteUpdatedAt < localUpdatedAt {
+        return (localValue, localUpdatedAt)
+    }
+    if remoteWish.updatedAt > localWish.updatedAt {
+        return (remoteValue, remoteUpdatedAt)
+    }
+    if remoteWish.updatedAt < localWish.updatedAt {
+        return (localValue, localUpdatedAt)
+    }
+    return (localValue, localUpdatedAt)
+}
+
 enum AppTab: Hashable {
     case home
     case life
@@ -527,11 +554,12 @@ final class WishStore: ObservableObject {
             guard deletedIDs.contains(importedWish.id) == false else { continue }
 
             let preparedWish = importedWish.preparedForScopeReplacement(in: scope)
-            if let existingWish = mergedByID[preparedWish.id],
-               existingWish.updatedAt > preparedWish.updatedAt {
+            if let existingWish = mergedByID[preparedWish.id] {
+                let mergedWish = existingWish.mergedForSync(with: preparedWish, scope: scope)
                 debugWishStore(
-                    "merge remote keep newer local id=\(existingWish.id.uuidString.lowercased()) localUpdatedAt=\(existingWish.updatedAt.timeIntervalSince1970) remoteUpdatedAt=\(preparedWish.updatedAt.timeIntervalSince1970)"
+                    "merge remote resolve id=\(preparedWish.id.uuidString.lowercased()) localUpdatedAt=\(existingWish.updatedAt.timeIntervalSince1970) remoteUpdatedAt=\(preparedWish.updatedAt.timeIntervalSince1970) finalUpdatedAt=\(mergedWish.updatedAt.timeIntervalSince1970) finalCategory=\(mergedWish.category.rawValue) finalStatus=\(mergedWish.status.rawValue)"
                 )
+                mergedByID[preparedWish.id] = mergedWish
                 continue
             }
             if let existingWish = localBeforeByID[preparedWish.id] {
@@ -1536,11 +1564,17 @@ enum MemoryPhotoStorage {
 private struct StoredWish: Codable {
     let id: UUID
     let title: String
+    let titleUpdatedAt: Date?
     let detail: String
+    let detailUpdatedAt: Date?
     let note: String
+    let noteUpdatedAt: Date?
     let categoryRawValue: String
+    let categoryUpdatedAt: Date?
     let statusRawValue: String
+    let statusUpdatedAt: Date?
     let targetText: String
+    let targetTextUpdatedAt: Date?
     let symbol: String
     let spaceId: String?
     let createdByUserId: String?
@@ -1552,11 +1586,17 @@ private struct StoredWish: Codable {
     init(wish: PlaceWish) {
         id = wish.id
         title = wish.title
+        titleUpdatedAt = wish.titleUpdatedAt
         detail = wish.detail
+        detailUpdatedAt = wish.detailUpdatedAt
         note = wish.note
+        noteUpdatedAt = wish.noteUpdatedAt
         categoryRawValue = wish.category.rawValue
+        categoryUpdatedAt = wish.categoryUpdatedAt
         statusRawValue = wish.status.rawValue
+        statusUpdatedAt = wish.statusUpdatedAt
         targetText = wish.targetText
+        targetTextUpdatedAt = wish.targetTextUpdatedAt
         symbol = wish.symbol
         spaceId = wish.spaceId
         createdByUserId = wish.createdByUserId
@@ -1574,11 +1614,17 @@ private struct StoredWish: Codable {
         return PlaceWish(
             id: id,
             title: title,
+            titleUpdatedAt: titleUpdatedAt,
             detail: detail,
+            detailUpdatedAt: detailUpdatedAt,
             note: note,
+            noteUpdatedAt: noteUpdatedAt,
             category: WishCategory(rawValue: categoryRawValue) ?? .date,
+            categoryUpdatedAt: categoryUpdatedAt,
             status: WishStatus(rawValue: statusRawValue) ?? .dreaming,
+            statusUpdatedAt: statusUpdatedAt,
             targetText: targetText,
+            targetTextUpdatedAt: targetTextUpdatedAt,
             symbol: symbol,
             spaceId: spaceId ?? AppDataDefaults.localSpaceId,
             createdByUserId: createdByUserId ?? AppDataDefaults.localUserId,
@@ -1984,19 +2030,26 @@ private extension PlaceWish {
     }
 
     func preparedForLocalInsert(in scope: AppContentScope) -> PlaceWish {
+        let mutationAt = Date.now
         return PlaceWish(
             id: id,
             title: title,
+            titleUpdatedAt: mutationAt,
             detail: detail,
+            detailUpdatedAt: mutationAt,
             note: note,
+            noteUpdatedAt: mutationAt,
             category: category,
+            categoryUpdatedAt: mutationAt,
             status: status,
+            statusUpdatedAt: mutationAt,
             targetText: targetText,
+            targetTextUpdatedAt: mutationAt,
             symbol: symbol,
             spaceId: scope.spaceId,
             createdByUserId: scope.currentUserId,
             createdAt: createdAt,
-            updatedAt: .now,
+            updatedAt: mutationAt,
             syncStatus: .localOnly
         )
     }
@@ -2005,11 +2058,17 @@ private extension PlaceWish {
         return PlaceWish(
             id: id,
             title: title,
+            titleUpdatedAt: titleUpdatedAt,
             detail: detail,
+            detailUpdatedAt: detailUpdatedAt,
             note: note,
+            noteUpdatedAt: noteUpdatedAt,
             category: category,
+            categoryUpdatedAt: categoryUpdatedAt,
             status: status,
+            statusUpdatedAt: statusUpdatedAt,
             targetText: targetText,
+            targetTextUpdatedAt: targetTextUpdatedAt,
             symbol: symbol,
             spaceId: scope.spaceId,
             createdByUserId: scope.currentUserId,
@@ -2023,11 +2082,17 @@ private extension PlaceWish {
         return PlaceWish(
             id: id,
             title: title,
+            titleUpdatedAt: titleUpdatedAt,
             detail: detail,
+            detailUpdatedAt: detailUpdatedAt,
             note: note,
+            noteUpdatedAt: noteUpdatedAt,
             category: category,
+            categoryUpdatedAt: categoryUpdatedAt,
             status: status,
+            statusUpdatedAt: statusUpdatedAt,
             targetText: targetText,
+            targetTextUpdatedAt: targetTextUpdatedAt,
             symbol: symbol,
             spaceId: scope.spaceId,
             createdByUserId: createdByUserId,
@@ -2047,20 +2112,125 @@ private extension PlaceWish {
         symbol: String,
         scope: AppContentScope
     ) -> PlaceWish {
-        PlaceWish(
+        let mutationAt = Date.now
+        let resolvedTitleUpdatedAt = title == self.title ? titleUpdatedAt : mutationAt
+        let resolvedDetailUpdatedAt = detail == self.detail ? detailUpdatedAt : mutationAt
+        let resolvedNoteUpdatedAt = note == self.note ? noteUpdatedAt : mutationAt
+        let resolvedCategoryUpdatedAt = (category == self.category && symbol == self.symbol)
+            ? categoryUpdatedAt
+            : mutationAt
+        let resolvedStatusUpdatedAt = status == self.status ? statusUpdatedAt : mutationAt
+        let resolvedTargetTextUpdatedAt = targetText == self.targetText ? targetTextUpdatedAt : mutationAt
+        return PlaceWish(
             id: id,
             title: title,
+            titleUpdatedAt: resolvedTitleUpdatedAt,
             detail: detail,
+            detailUpdatedAt: resolvedDetailUpdatedAt,
             note: note,
+            noteUpdatedAt: resolvedNoteUpdatedAt,
             category: category,
+            categoryUpdatedAt: resolvedCategoryUpdatedAt,
             status: status,
+            statusUpdatedAt: resolvedStatusUpdatedAt,
             targetText: targetText,
+            targetTextUpdatedAt: resolvedTargetTextUpdatedAt,
             symbol: symbol,
             spaceId: scope.spaceId,
             createdByUserId: createdByUserId,
             createdAt: createdAt,
-            updatedAt: .now,
+            updatedAt: [
+                mutationAt,
+                resolvedTitleUpdatedAt,
+                resolvedDetailUpdatedAt,
+                resolvedNoteUpdatedAt,
+                resolvedCategoryUpdatedAt,
+                resolvedStatusUpdatedAt,
+                resolvedTargetTextUpdatedAt
+            ].max(),
             syncStatus: .localOnly
+        )
+    }
+
+    func mergedForSync(with remoteWish: PlaceWish, scope: AppContentScope) -> PlaceWish {
+        let resolvedRemoteWish = remoteWish.preparedForScopeReplacement(in: scope)
+        let resolvedTitle = resolveWishField(
+            localValue: title,
+            localUpdatedAt: titleUpdatedAt,
+            remoteValue: resolvedRemoteWish.title,
+            remoteUpdatedAt: wishFieldResolutionTime(resolvedRemoteWish.titleUpdatedAt, fallback: resolvedRemoteWish),
+            localWish: self,
+            remoteWish: resolvedRemoteWish
+        )
+        let resolvedDetail = resolveWishField(
+            localValue: detail,
+            localUpdatedAt: detailUpdatedAt,
+            remoteValue: resolvedRemoteWish.detail,
+            remoteUpdatedAt: wishFieldResolutionTime(resolvedRemoteWish.detailUpdatedAt, fallback: resolvedRemoteWish),
+            localWish: self,
+            remoteWish: resolvedRemoteWish
+        )
+        let resolvedNote = resolveWishField(
+            localValue: note,
+            localUpdatedAt: noteUpdatedAt,
+            remoteValue: resolvedRemoteWish.note,
+            remoteUpdatedAt: wishFieldResolutionTime(resolvedRemoteWish.noteUpdatedAt, fallback: resolvedRemoteWish),
+            localWish: self,
+            remoteWish: resolvedRemoteWish
+        )
+        let resolvedCategory = resolveWishField(
+            localValue: (category, symbol),
+            localUpdatedAt: categoryUpdatedAt,
+            remoteValue: (resolvedRemoteWish.category, resolvedRemoteWish.symbol),
+            remoteUpdatedAt: wishFieldResolutionTime(resolvedRemoteWish.categoryUpdatedAt, fallback: resolvedRemoteWish),
+            localWish: self,
+            remoteWish: resolvedRemoteWish
+        )
+        let resolvedStatus = resolveWishField(
+            localValue: status,
+            localUpdatedAt: statusUpdatedAt,
+            remoteValue: resolvedRemoteWish.status,
+            remoteUpdatedAt: wishFieldResolutionTime(resolvedRemoteWish.statusUpdatedAt, fallback: resolvedRemoteWish),
+            localWish: self,
+            remoteWish: resolvedRemoteWish
+        )
+        let resolvedTargetText = resolveWishField(
+            localValue: targetText,
+            localUpdatedAt: targetTextUpdatedAt,
+            remoteValue: resolvedRemoteWish.targetText,
+            remoteUpdatedAt: wishFieldResolutionTime(resolvedRemoteWish.targetTextUpdatedAt, fallback: resolvedRemoteWish),
+            localWish: self,
+            remoteWish: resolvedRemoteWish
+        )
+        let preferredWish = resolvedRemoteWish.updatedAt > updatedAt ? resolvedRemoteWish : self
+        return PlaceWish(
+            id: id,
+            title: resolvedTitle.0,
+            titleUpdatedAt: resolvedTitle.1,
+            detail: resolvedDetail.0,
+            detailUpdatedAt: resolvedDetail.1,
+            note: resolvedNote.0,
+            noteUpdatedAt: resolvedNote.1,
+            category: resolvedCategory.0.0,
+            categoryUpdatedAt: resolvedCategory.1,
+            status: resolvedStatus.0,
+            statusUpdatedAt: resolvedStatus.1,
+            targetText: resolvedTargetText.0,
+            targetTextUpdatedAt: resolvedTargetText.1,
+            symbol: resolvedCategory.0.1,
+            spaceId: scope.spaceId,
+            createdByUserId: preferredWish.createdByUserId,
+            createdAt: min(createdAt, resolvedRemoteWish.createdAt),
+            updatedAt: [
+                preferredWish.updatedAt,
+                resolvedTitle.1,
+                resolvedDetail.1,
+                resolvedNote.1,
+                resolvedCategory.1,
+                resolvedStatus.1,
+                resolvedTargetText.1
+            ].max(),
+            syncStatus: preferredWish.syncStatus
         )
     }
 }

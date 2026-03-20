@@ -640,11 +640,17 @@ struct WeeklyTodoItem: Identifiable {
 struct PlaceWish: Identifiable {
     let id: UUID
     let title: String
+    let titleUpdatedAt: Date
     let detail: String
+    let detailUpdatedAt: Date
     let note: String
+    let noteUpdatedAt: Date
     let category: WishCategory
+    let categoryUpdatedAt: Date
     let status: WishStatus
+    let statusUpdatedAt: Date
     let targetText: String
+    let targetTextUpdatedAt: Date
     let symbol: String
     let spaceId: String
     let createdByUserId: String
@@ -655,11 +661,17 @@ struct PlaceWish: Identifiable {
     init(
         id: UUID = UUID(),
         title: String,
+        titleUpdatedAt: Date? = nil,
         detail: String,
+        detailUpdatedAt: Date? = nil,
         note: String = "",
+        noteUpdatedAt: Date? = nil,
         category: WishCategory = .date,
+        categoryUpdatedAt: Date? = nil,
         status: WishStatus = .dreaming,
+        statusUpdatedAt: Date? = nil,
         targetText: String = "",
+        targetTextUpdatedAt: Date? = nil,
         symbol: String,
         spaceId: String = AppDataDefaults.localSpaceId,
         createdByUserId: String = AppDataDefaults.localUserId,
@@ -667,18 +679,40 @@ struct PlaceWish: Identifiable {
         updatedAt: Date? = nil,
         syncStatus: SyncStatus = .localOnly
     ) {
+        let resolvedUpdatedAt = updatedAt ?? createdAt
+        let resolvedTitleUpdatedAt = titleUpdatedAt ?? resolvedUpdatedAt
+        let resolvedDetailUpdatedAt = detailUpdatedAt ?? resolvedUpdatedAt
+        let resolvedNoteUpdatedAt = noteUpdatedAt ?? resolvedUpdatedAt
+        let resolvedCategoryUpdatedAt = categoryUpdatedAt ?? resolvedUpdatedAt
+        let resolvedStatusUpdatedAt = statusUpdatedAt ?? resolvedUpdatedAt
+        let resolvedTargetTextUpdatedAt = targetTextUpdatedAt ?? resolvedUpdatedAt
+
         self.id = id
         self.title = title
+        self.titleUpdatedAt = resolvedTitleUpdatedAt
         self.detail = detail
+        self.detailUpdatedAt = resolvedDetailUpdatedAt
         self.note = note
+        self.noteUpdatedAt = resolvedNoteUpdatedAt
         self.category = category
+        self.categoryUpdatedAt = resolvedCategoryUpdatedAt
         self.status = status
+        self.statusUpdatedAt = resolvedStatusUpdatedAt
         self.targetText = targetText
+        self.targetTextUpdatedAt = resolvedTargetTextUpdatedAt
         self.symbol = symbol
         self.spaceId = spaceId
         self.createdByUserId = createdByUserId
         self.createdAt = createdAt
-        self.updatedAt = updatedAt ?? createdAt
+        self.updatedAt = [
+            resolvedUpdatedAt,
+            resolvedTitleUpdatedAt,
+            resolvedDetailUpdatedAt,
+            resolvedNoteUpdatedAt,
+            resolvedCategoryUpdatedAt,
+            resolvedStatusUpdatedAt,
+            resolvedTargetTextUpdatedAt
+        ].max() ?? resolvedUpdatedAt
         self.syncStatus = syncStatus
     }
 }
