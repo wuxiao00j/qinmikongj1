@@ -71,6 +71,17 @@
       "currentUserId": "user-avery",
       "partnerUserId": null,
       "spaceIds": []
+    },
+    {
+      "accountId": "acct-real-casey-fresh",
+      "displayName": "Casey",
+      "providerName": "Couple Space ID",
+      "accountHint": "casey.fresh@demo.local",
+      "password": "couplespace",
+      "accessToken": "demo-token-casey-fresh",
+      "currentUserId": "user-casey-fresh",
+      "partnerUserId": null,
+      "spaceIds": []
     }
   ],
   "spaces": {

@@ -19,6 +19,7 @@ struct MeView: View {
 
     @State private var selectedDestination: SettingsDestination?
     @State private var pendingSpaceSettingsAction: SpaceSettingsEntryAction?
+    @State private var isPresentingLogoutConfirmation = false
 
     private let insightColumns = [
         GridItem(.flexible(), spacing: 10),
@@ -32,17 +33,7 @@ struct MeView: View {
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: AppTheme.Spacing.pageBlock) {
-                        MeRelationshipHeaderCard(
-                            relationship: relationshipStore.state,
-                            onCreateSpace: {
-                                pendingSpaceSettingsAction = .create
-                                selectedDestination = .spaceSettings
-                            },
-                            onJoinSpace: {
-                                pendingSpaceSettingsAction = .join
-                                selectedDestination = .spaceSettings
-                            }
-                        )
+                        topStatusCard
 
                         accountSyncSection
 
@@ -163,6 +154,19 @@ struct MeView: View {
             .onChange(of: navigationState.pendingDeepLink) { _, _ in
                 handlePendingDeepLinkIfNeeded()
             }
+            .confirmationDialog(
+                "退出当前账号？",
+                isPresented: $isPresentingLogoutConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("退出登录", role: .destructive) {
+                    performLogout()
+                }
+
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("退出后会回到未登录状态，“我的”页顶部会重新显示登录卡片，当前共享关系和共享作用域也会一起收回到本地。")
+            }
         }
     }
 
@@ -202,28 +206,54 @@ struct MeView: View {
         }
     }
 
+    private func performLogout() {
+        selectedDestination = nil
+        pendingSpaceSettingsAction = nil
+        syncService.logoutCurrentAccount()
+    }
+
+    @ViewBuilder
+    private var topStatusCard: some View {
+        if accountSessionStore.state.isLoggedIn {
+            MeRelationshipHeaderCard(
+                relationship: relationshipStore.state,
+                accountDisplayName: accountSessionStore.state.account?.nickname ?? "已登录账号",
+                accountDetailText: accountSessionStore.state.account?.detailText,
+                onLogout: {
+                    isPresentingLogoutConfirmation = true
+                },
+                onCreateSpace: {
+                    pendingSpaceSettingsAction = .create
+                    selectedDestination = .spaceSettings
+                },
+                onJoinSpace: {
+                    pendingSpaceSettingsAction = .join
+                    selectedDestination = .spaceSettings
+                }
+            )
+        } else {
+            LoggedOutLoginEntryCard(
+                onLogin: {
+                    selectedDestination = .login
+                },
+                onContinueLocally: {
+                    selectedDestination = nil
+                    navigationState.selectedTab = .home
+                }
+            )
+        }
+    }
+
     private var accountSyncSection: some View {
         let isLoggedIn = accountSessionStore.state.isLoggedIn
 
         return AppSectionCard(
-            title: "账号与同步",
+            title: "保存与同步",
             subtitle: isLoggedIn
-                ? "当前账号会继续承接共享空间连接与状态恢复。"
-                : "登录一份账号，或先按本地方式继续使用；需要时再进入更细的状态说明。",
-            symbol: "person.crop.circle"
+                ? "账号已经接入，但当前内容仍以本地保存和本地备份为主；云端状态会继续在这里承接。"
+                : "现在仍以本地保存为主，需要时再登录账号或整理备份恢复即可。",
+            symbol: "externaldrive"
         ) {
-            if isLoggedIn == false {
-                Button {
-                    selectedDestination = .login
-                } label: {
-                    PageActionPill(
-                        text: "登录账号",
-                        systemImage: "person.crop.circle.badge.checkmark"
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-        } content: {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     PageMetaPill(
@@ -354,6 +384,73 @@ struct MeView: View {
         }
 
         return "当前只是保留一层云端准备状态，普通使用仍建议把这 \(totalContentCount) 条内容按本地保存和本地备份来理解。"
+    }
+}
+
+private struct LoggedOutLoginEntryCard: View {
+    let onLogin: () -> Void
+    let onContinueLocally: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeroLabel(text: "余白账号", systemImage: "person.crop.circle")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("登录后继续进入同一个共享空间")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(AppTheme.Colors.title)
+
+                Text("账号登录、关系承接和后续共享都会沿着这份身份继续走下去。如果现在只想自己先记着，也可以先单人本地使用。")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.Colors.subtitle)
+                    .lineSpacing(3)
+            }
+
+            HStack(spacing: 8) {
+                PageMetaPill(text: "邮箱登录", systemImage: "envelope")
+                PageMetaPill(text: "本地优先", systemImage: "iphone", emphasis: true)
+            }
+
+            HStack(spacing: 10) {
+                Button(action: onLogin) {
+                    PageCTAButton(
+                        text: "登录",
+                        systemImage: "person.crop.circle.badge.checkmark"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onContinueLocally) {
+                    PageActionPill(
+                        text: "单人本地使用",
+                        systemImage: "iphone"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            ZStack {
+                Circle()
+                    .fill(AppTheme.Colors.glow.opacity(0.36))
+                    .frame(width: 190, height: 190)
+                    .blur(radius: 28)
+                    .offset(x: 120, y: -70)
+
+                Circle()
+                    .fill(AppTheme.Colors.softAccentSecondary.opacity(0.22))
+                    .frame(width: 140, height: 140)
+                    .blur(radius: 18)
+                    .offset(x: -100, y: 90)
+            }
+        )
+        .appCardSurface(
+            AppTheme.Colors.cardSurfaceGradient(.primary, accent: AppTheme.Colors.softAccent),
+            cornerRadius: 28,
+            borderColor: AppTheme.Colors.divider
+        )
     }
 }
 

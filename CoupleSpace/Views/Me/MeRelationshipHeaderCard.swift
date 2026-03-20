@@ -2,6 +2,9 @@ import SwiftUI
 
 struct MeRelationshipHeaderCard: View {
     let relationship: CoupleRelationshipState
+    let accountDisplayName: String
+    let accountDetailText: String?
+    let onLogout: () -> Void
     let onCreateSpace: () -> Void
     let onJoinSpace: () -> Void
 
@@ -75,6 +78,8 @@ struct MeRelationshipHeaderCard: View {
                         .lineSpacing(3)
                 }
             }
+
+            accountStatusCard
         }
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -105,7 +110,7 @@ struct MeRelationshipHeaderCard: View {
         case .unpaired:
             return "共享空间关系"
         case .inviting:
-            return "情侣空间邀请"
+            return "余白邀请"
         case .paired:
             return "双人共享空间"
         }
@@ -125,7 +130,7 @@ struct MeRelationshipHeaderCard: View {
     private var subtitleText: String {
         switch relationship.relationStatus {
         case .unpaired:
-            return "先创建一个情侣空间，或者输入邀请码加入对方的空间，关系状态就会在这里安静地出现。"
+            return "先创建一份余白，或者输入邀请码加入对方的空间，关系状态就会在这里安静地出现。"
         case .inviting:
             return "邀请码已经生成，等 \(relationship.partnerDisplayName) 加入后，这个空间就会正式变成两个人共享。"
         case .paired:
@@ -211,5 +216,48 @@ struct MeRelationshipHeaderCard: View {
         .padding(.vertical, 7)
         .background(AppTheme.Colors.cardSurface(.tertiary))
         .clipShape(Capsule())
+    }
+
+    private var accountStatusCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("当前账号")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.Colors.subtitle)
+
+                    Text(accountDisplayName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.title)
+
+                    if let accountDetailText,
+                       accountDetailText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                        Text(accountDetailText)
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.Colors.subtitle)
+                            .lineSpacing(3)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Button(action: onLogout) {
+                    PageActionPill(
+                        text: "退出登录",
+                        systemImage: "rectangle.portrait.and.arrow.right"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text("账号会继续承接当前关系和共享空间；如需切换账号，可以先从这里退出。")
+                .font(.footnote)
+                .foregroundStyle(AppTheme.Colors.subtitle)
+                .lineSpacing(3)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.Colors.cardSurface(.secondary))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
