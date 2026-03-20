@@ -774,6 +774,84 @@ def filter_wishes_by_tombstones(
     return [wish for wish in wishes if wish.id not in deleted_ids]
 
 
+def weekly_todo_debug_summary(todos: list[StoredRemoteWeeklyTodoModel]) -> str:
+    if not todos:
+        return "[]"
+
+    summary = ",".join(
+        f"{todo.id}|user={todo.createdByUserId}|updatedAt={todo.updatedAt.timestamp()}|completed={todo.isCompleted}|scheduledDate={todo.scheduledDate.isoformat() if todo.scheduledDate else 'nil'}"
+        for todo in sorted(todos, key=lambda item: item.updatedAt)
+    )
+    return f"[{summary}]"
+
+
+def merge_weekly_todo_models(
+    existing_todo: StoredRemoteWeeklyTodoModel,
+    incoming_todo: StoredRemoteWeeklyTodoModel,
+) -> StoredRemoteWeeklyTodoModel:
+    if incoming_todo.updatedAt > existing_todo.updatedAt:
+        newer_todo = incoming_todo
+        older_todo = existing_todo
+    elif incoming_todo.updatedAt < existing_todo.updatedAt:
+        newer_todo = existing_todo
+        older_todo = incoming_todo
+    else:
+        newer_todo = incoming_todo
+        older_todo = existing_todo
+
+    return newer_todo.model_copy(
+        update={
+            "createdAt": min(existing_todo.createdAt, incoming_todo.createdAt),
+            "createdByUserId": older_todo.createdByUserId,
+        }
+    )
+
+
+def merge_weekly_todo_snapshot_state(
+    existing_snapshot: SnapshotRecordModel | None,
+    incoming_snapshot: SnapshotRecordModel,
+) -> SnapshotRecordModel:
+    if existing_snapshot is None:
+        return incoming_snapshot
+
+    merged_todos_by_id: dict[str, StoredRemoteWeeklyTodoModel] = {
+        todo.id: todo for todo in existing_snapshot.weeklyTodos
+    }
+    for todo in incoming_snapshot.weeklyTodos:
+        existing_todo = merged_todos_by_id.get(todo.id)
+        if existing_todo is None:
+            merged_todos_by_id[todo.id] = todo
+            continue
+
+        merged_todo = merge_weekly_todo_models(existing_todo, todo)
+        logger.info(
+            "snapshot weekly todo conflict id=%s existing_updated_at=%s incoming_updated_at=%s merged_updated_at=%s existing_completed=%s incoming_completed=%s merged_completed=%s",
+            todo.id,
+            existing_todo.updatedAt.timestamp(),
+            todo.updatedAt.timestamp(),
+            merged_todo.updatedAt.timestamp(),
+            existing_todo.isCompleted,
+            todo.isCompleted,
+            merged_todo.isCompleted,
+        )
+        merged_todos_by_id[todo.id] = merged_todo
+
+    merged_todos = sorted(
+        merged_todos_by_id.values(),
+        key=lambda item: item.updatedAt,
+        reverse=True,
+    )
+
+    logger.info(
+        "snapshot weekly todo merge existing=%s incoming=%s merged=%s",
+        weekly_todo_debug_summary(existing_snapshot.weeklyTodos),
+        weekly_todo_debug_summary(incoming_snapshot.weeklyTodos),
+        weekly_todo_debug_summary(merged_todos),
+    )
+
+    return incoming_snapshot.model_copy(update={"weeklyTodos": merged_todos})
+
+
 def wish_debug_summary(wishes: list[StoredRemoteWishModel]) -> str:
     if not wishes:
         return "[]"
@@ -1127,6 +1205,7 @@ def save_snapshot(session: Session, space: Space, snapshot_record: SnapshotRecor
         else None
     )
     merged_snapshot = merge_memory_snapshot_state(existing_snapshot, snapshot_record)
+    merged_snapshot = merge_weekly_todo_snapshot_state(existing_snapshot, merged_snapshot)
     merged_snapshot = merge_wish_snapshot_state(existing_snapshot, merged_snapshot)
 
     if space.snapshot is None:
