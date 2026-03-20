@@ -66,6 +66,7 @@ class AuthenticatedAccountResponse(BaseModel):
     providerName: str
     accountHint: str | None = None
     accessToken: str
+    activeSpaceId: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -471,13 +472,15 @@ def find_account_by_login_hint(session: Session, payload: DemoLoginRequest | Non
     )
 
 
-def build_authenticated_account_response(account: Account) -> AuthenticatedAccountResponse:
+def build_authenticated_account_response(session: Session, account: Account) -> AuthenticatedAccountResponse:
+    active_space = get_active_space_for_account(session, account)
     return AuthenticatedAccountResponse(
         accountId=account.account_id,
         displayName=account.display_name,
         providerName=account.provider_name,
         accountHint=account.account_hint,
         accessToken=account.access_token,
+        activeSpaceId=active_space.space_id if active_space is not None else None,
     )
 
 
@@ -1634,7 +1637,7 @@ async def login(
     db: Session = Depends(get_db),
 ) -> AuthenticatedAccountResponse:
     account = authenticate_account(db, payload)
-    return build_authenticated_account_response(account)
+    return build_authenticated_account_response(db, account)
 
 
 @app.post("/auth/demo-login", response_model=AuthenticatedAccountResponse)
@@ -1643,7 +1646,7 @@ async def demo_login(
     db: Session = Depends(get_db),
 ) -> AuthenticatedAccountResponse:
     account = find_account_by_login_hint(db, payload)
-    return build_authenticated_account_response(account)
+    return build_authenticated_account_response(db, account)
 
 
 @app.post("/spaces", response_model=SpaceConnectionResponse)

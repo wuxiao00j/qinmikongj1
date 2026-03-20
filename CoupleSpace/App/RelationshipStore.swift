@@ -727,6 +727,60 @@ final class RelationshipStore: ObservableObject {
         )
     }
 
+    func adoptAuthenticatedRelationship(activeSpaceID: String?) async {
+        let sessionState = accountSessionStore.state
+        guard let account = sessionState.account else { return }
+
+        let currentNickname = Self.normalizedName(
+            account.nickname,
+            fallback: state.currentUser.nickname
+        )
+        let normalizedActiveSpaceID = activeSpaceID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let normalizedActiveSpaceID, normalizedActiveSpaceID.isEmpty == false {
+            state = CoupleRelationshipState(
+                currentAccountId: account.accountId,
+                currentUser: Self.makeUser(
+                    id: state.currentUser.userId,
+                    nickname: currentNickname
+                ),
+                partner: state.partner,
+                space: SharedSpaceState(
+                    spaceId: normalizedActiveSpaceID,
+                    title: state.space?.title ?? "双人共享空间",
+                    inviteCode: state.space?.inviteCode ?? "",
+                    isActivated: true,
+                    createdAt: state.space?.createdAt ?? state.pairedAt ?? Date()
+                ),
+                relationStatus: .paired,
+                connectionMode: .backendRemote,
+                inviteCode: state.inviteCode,
+                invitedAt: state.invitedAt,
+                pairedAt: state.pairedAt ?? Date()
+            )
+            save()
+            await refreshRemoteRelationshipStatusIfNeeded()
+            return
+        }
+
+        state = CoupleRelationshipState(
+            currentAccountId: account.accountId,
+            currentUser: Self.makeUser(
+                id: AppDataDefaults.localUserId,
+                nickname: currentNickname
+            ),
+            partner: nil,
+            space: nil,
+            relationStatus: .unpaired,
+            connectionMode: .localDemo,
+            inviteCode: nil,
+            invitedAt: nil,
+            pairedAt: nil
+        )
+        save()
+    }
+
     private func ensureAuthenticatedSession() throws -> AccountSessionState {
         let sessionState = accountSessionStore.state
 
@@ -806,6 +860,11 @@ final class RelationshipStore: ObservableObject {
 
         if nextState.space != refreshedSpace {
             nextState.space = refreshedSpace
+            hasChanges = true
+        }
+
+        if nextState.connectionMode != .backendRemote {
+            nextState.connectionMode = .backendRemote
             hasChanges = true
         }
 

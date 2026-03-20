@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MeView: View {
     @EnvironmentObject private var navigationState: AppNavigationState
@@ -110,7 +111,17 @@ struct MeView: View {
                     }
                 }
             )) {
-                AccountSyncStatusView()
+                AccountSyncStatusView(onLoginCompletion: handleAccountLoginCompletion)
+            }
+            .navigationDestination(isPresented: Binding(
+                get: { selectedDestination == .login },
+                set: { isPresented in
+                    if !isPresented {
+                        selectedDestination = nil
+                    }
+                }
+            )) {
+                AccountLoginView(onCompletion: handleAccountLoginCompletion)
             }
             .onAppear {
                 handlePendingDeepLinkIfNeeded()
@@ -164,6 +175,8 @@ struct MeView: View {
             selectedDestination = .anniversaryManagement
         case .accountSync:
             selectedDestination = .accountSync
+        case .login:
+            selectedDestination = .login
         case .none:
             break
         }
@@ -176,18 +189,40 @@ struct MeView: View {
         navigationState.consumePendingDeepLink(.anniversaryManagement)
     }
 
+    private func handleAccountLoginCompletion(_ action: AccountLoginCompletionAction) {
+        switch action {
+        case .continueLocally:
+            selectedDestination = nil
+        case .returnToMainExperience:
+            selectedDestination = nil
+            navigationState.selectedTab = .home
+        case .openRelationshipSetup:
+            pendingSpaceSettingsAction = nil
+            selectedDestination = .spaceSettings
+        }
+    }
+
     private var accountSyncSection: some View {
-        AppSectionCard(
+        let isLoggedIn = accountSessionStore.state.isLoggedIn
+
+        return AppSectionCard(
             title: "账号与同步",
-            subtitle: "登录账号、查看本地保存状态和备份方式；测试环境接入口继续收在详情页里。",
+            subtitle: isLoggedIn
+                ? "当前账号会继续承接共享空间连接与状态恢复。"
+                : "登录一份账号，或先按本地方式继续使用；需要时再进入更细的状态说明。",
             symbol: "person.crop.circle"
         ) {
-            Button {
-                selectedDestination = .accountSync
-            } label: {
-                PageActionPill(text: "查看详情", systemImage: "chevron.right")
+            if isLoggedIn == false {
+                Button {
+                    selectedDestination = .login
+                } label: {
+                    PageActionPill(
+                        text: "登录账号",
+                        systemImage: "person.crop.circle.badge.checkmark"
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         } content: {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
@@ -215,10 +250,12 @@ struct MeView: View {
                     .foregroundStyle(AppTheme.Colors.subtitle)
                     .lineSpacing(4)
 
-                Text("正式登录入口、当前会话状态和本地备份恢复都在详情页里；联调地址已切到公网测试环境，仅供当前设备测试，仍不是正式生产环境。")
-                    .font(.footnote)
-                    .foregroundStyle(AppTheme.Colors.subtitle)
-                    .lineSpacing(4)
+                if isLoggedIn == false {
+                    Text("现在先支持邮箱和密码登录；如果只是继续记录和查看，也可以直接先按本地方式使用。")
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.Colors.subtitle)
+                        .lineSpacing(4)
+                }
             }
         }
     }
@@ -313,7 +350,7 @@ struct MeView: View {
 
     private var accountSyncOverviewText: String {
         if syncService.status.mode == .localOnly {
-            return "当前空间里的 \(totalContentCount) 条内容都会先稳稳留在这台设备里；如果只是日常记录、查看或换机前留存，继续使用本地备份恢复就够了。需要连接账号时，也已经可以从详情页的正式登录入口进入。"
+            return "当前空间里的 \(totalContentCount) 条内容都会先稳稳留在这台设备里；如果只是日常记录、查看或换机前留存，继续使用本地备份恢复就够了。需要连接账号时，可以从这里直接进入登录。"
         }
 
         return "当前只是保留一层云端准备状态，普通使用仍建议把这 \(totalContentCount) 条内容按本地保存和本地备份来理解。"
@@ -333,11 +370,13 @@ private struct AccountSyncStatusView: View {
     @EnvironmentObject private var accountSessionStore: AccountSessionStore
     @EnvironmentObject private var syncService: AppSyncService
 
+    let onLoginCompletion: (AccountLoginCompletionAction) -> Void
+
     @State private var isPresentingPreviewSheet = false
     @State private var isPresentingBackupExporter = false
     @State private var isPresentingBackupImporter = false
     @State private var isPresentingImportConfirmation = false
-    @State private var isPresentingAccountLoginSheet = false
+    @State private var isPresentingAccountLoginPage = false
     @State private var isShowingDeveloperTools = false
     @State private var exportDocument = LocalBackupDocument(
         payload: LocalBackupService.makePayload(
@@ -435,7 +474,9 @@ private struct AccountSyncStatusView: View {
                         }
                     }
 
+#if DEBUG
                     developerToolsSection
+#endif
                 }
                 .padding(AppTheme.Spacing.page)
                 .padding(.bottom, 28)
@@ -449,8 +490,8 @@ private struct AccountSyncStatusView: View {
                 partnerName: relationshipStore.state.partnerDisplayName
             )
         }
-        .sheet(isPresented: $isPresentingAccountLoginSheet) {
-            AccountLoginSheet()
+        .navigationDestination(isPresented: $isPresentingAccountLoginPage) {
+            AccountLoginView(onCompletion: handleLoginCompletion)
         }
         .fileExporter(
             isPresented: $isPresentingBackupExporter,
@@ -699,7 +740,7 @@ private struct AccountSyncStatusView: View {
             symbol: isAuthenticated ? "person.crop.circle.badge.checkmark" : "person.crop.circle"
         ) {
             Button {
-                isPresentingAccountLoginSheet = true
+                isPresentingAccountLoginPage = true
             } label: {
                 PageActionPill(
                     text: isAuthenticated ? "切换账号" : "登录账号",
@@ -968,8 +1009,8 @@ private struct AccountSyncStatusView: View {
 
     private var developerToolsSection: some View {
         AppSectionCard(
-            title: "测试环境接入",
-            subtitle: "仅在需要联调或验证读写闭环时再展开，平时使用可以忽略。",
+            title: "开发者入口",
+            subtitle: "仅在需要联调或验证当前设备状态时再展开，日常使用可以忽略。",
             symbol: "wrench.and.screwdriver"
         ) {
             DisclosureGroup(isExpanded: $isShowingDeveloperTools) {
@@ -979,11 +1020,11 @@ private struct AccountSyncStatusView: View {
                 .padding(.top, 12)
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(isShowingDeveloperTools ? "收起开发工具" : "展开开发工具")
+                    Text(isShowingDeveloperTools ? "收起开发者工具" : "展开开发者工具")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppTheme.Colors.title)
 
-                    Text("这里保留测试账号登录、手动推送当前内容和读取快照的入口，用于当前设备验证，不影响上面的正式状态展示。")
+                    Text("这里保留联调与快照验证入口，和上面的正式账号路径分开收纳。")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.Colors.subtitle)
                         .lineSpacing(3)
@@ -991,6 +1032,11 @@ private struct AccountSyncStatusView: View {
             }
             .tint(AppTheme.Colors.deepAccent)
         }
+    }
+
+    private func handleLoginCompletion(_ action: AccountLoginCompletionAction) {
+        isPresentingAccountLoginPage = false
+        onLoginCompletion(action)
     }
 
     private var rehearsalEntry: some View {
@@ -1192,9 +1238,17 @@ private struct BackupFeedback {
     let isError: Bool
 }
 
-private struct AccountLoginSheet: View {
-    @Environment(\.dismiss) private var dismiss
+private enum AccountLoginCompletionAction {
+    case continueLocally
+    case openRelationshipSetup
+    case returnToMainExperience
+}
+
+private struct AccountLoginView: View {
     @EnvironmentObject private var syncService: AppSyncService
+    @EnvironmentObject private var relationshipStore: RelationshipStore
+
+    let onCompletion: (AccountLoginCompletionAction) -> Void
 
     @State private var email = ""
     @State private var password = ""
@@ -1202,69 +1256,197 @@ private struct AccountLoginSheet: View {
     @State private var isSubmitting = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("登录一份可用账号")
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(AppTheme.Colors.title)
+        ZStack {
+            AppAtmosphereBackground(
+                primaryGlow: AppTheme.Colors.softAccent.opacity(0.28),
+                secondaryGlow: AppTheme.Colors.glow.opacity(0.2),
+                primaryOffset: CGSize(width: -120, height: -240),
+                secondaryOffset: CGSize(width: 130, height: -20)
+            )
 
-                        Text("当前先支持邮箱和密码登录。登录成功后，会直接承接到现有账号会话，后续共享空间连接和同步读写都会继续复用这份鉴权信息。")
-                            .font(.footnote)
-                            .foregroundStyle(AppTheme.Colors.subtitle)
-                            .lineSpacing(3)
-                    }
-                    .padding(.vertical, 4)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.pageBlock) {
+                    heroCard
+                    loginFormCard
+                    reassuranceCard
                 }
-                .listRowBackground(Color.clear)
-
-                Section("登录信息") {
-                    TextField("邮箱", text: $email)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.emailAddress)
-                        .autocorrectionDisabled()
-
-                    SecureField("密码", text: $password)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                .listRowBackground(AppTheme.Colors.cardBackground)
-
-                if let errorText, errorText.isEmpty == false {
-                    Section {
-                        Text(errorText)
-                            .font(.footnote)
-                            .foregroundStyle(AppTheme.Colors.subtitle)
-                            .lineSpacing(3)
-                    }
-                    .listRowBackground(AppTheme.Colors.cardBackground)
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background(AppTheme.Colors.pageBackground)
-            .navigationTitle("登录账号")
-            .secondaryPageNavigationStyle()
-            .interactiveDismissDisabled(isSubmitting)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") {
-                        dismiss()
-                    }
-                    .disabled(isSubmitting)
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(isSubmitting ? "登录中" : "登录") {
-                        submit()
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(canSubmit == false || isSubmitting)
-                }
+                .padding(AppTheme.Spacing.page)
+                .padding(.bottom, 124)
             }
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .secondaryPageNavigationStyle()
+        .safeAreaInset(edge: .bottom) {
+            actionBar
+        }
+    }
+
+    private var heroCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeroLabel(text: "余白账号", systemImage: "sparkles")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("把你们的日常继续留在同一个空间")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(AppTheme.Colors.title)
+
+                Text("登录后，关系连接、共享空间和后续承接都会沿着这份账号继续往下走。现在先支持邮箱和密码登录。")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.Colors.subtitle)
+                    .lineSpacing(4)
+            }
+
+            HStack(spacing: 8) {
+                PageMetaPill(text: "邮箱登录", systemImage: "envelope")
+                PageMetaPill(text: "本地优先", systemImage: "iphone", emphasis: true)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            ZStack {
+                Circle()
+                    .fill(AppTheme.Colors.glow.opacity(0.34))
+                    .frame(width: 184, height: 184)
+                    .blur(radius: 26)
+                    .offset(x: 120, y: -80)
+
+                Circle()
+                    .fill(AppTheme.Colors.softAccentSecondary.opacity(0.18))
+                    .frame(width: 148, height: 148)
+                    .blur(radius: 20)
+                    .offset(x: -96, y: 88)
+            }
+        )
+        .appCardSurface(
+            AppTheme.Colors.cardSurfaceGradient(.primary, accent: AppTheme.Colors.softAccent),
+            cornerRadius: AppTheme.CornerRadius.hero,
+            borderColor: AppTheme.Colors.divider
+        )
+    }
+
+    private var loginFormCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("登录信息")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.title)
+
+            VStack(spacing: 12) {
+                accountInputField(
+                    title: "邮箱",
+                    text: $email,
+                    prompt: "输入你的邮箱",
+                    textContentType: .username,
+                    keyboardType: .emailAddress,
+                    isSecure: false
+                )
+
+                accountInputField(
+                    title: "密码",
+                    text: $password,
+                    prompt: "输入你的密码",
+                    textContentType: .password,
+                    keyboardType: .default,
+                    isSecure: true
+                )
+            }
+
+            if let errorText, errorText.isEmpty == false {
+                Text(errorText)
+                    .font(.footnote)
+                    .foregroundStyle(AppTheme.Colors.subtitle)
+                    .lineSpacing(3)
+                    .padding(.top, 2)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .appCardSurface(
+            AppTheme.Colors.cardSurface(.primary),
+            cornerRadius: AppTheme.CornerRadius.large,
+            borderColor: AppTheme.Colors.divider
+        )
+    }
+
+    private var reassuranceCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("现在还可以单人本地使用")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.title)
+
+            Text("如果只是想继续记录、查看或整理现在的内容，也可以先不登录。内容会先稳稳留在这台设备里，需要时再连接账号。")
+                .font(.footnote)
+                .foregroundStyle(AppTheme.Colors.subtitle)
+                .lineSpacing(3)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .appCardSurface(
+            AppTheme.Colors.cardSurface(.secondary),
+            cornerRadius: AppTheme.CornerRadius.large,
+            borderColor: AppTheme.Colors.divider
+        )
+    }
+
+    private var actionBar: some View {
+        VStack(spacing: 10) {
+            Button {
+                submit()
+            } label: {
+                HStack(spacing: 8) {
+                    if isSubmitting {
+                        ProgressView()
+                            .tint(AppTheme.Colors.title)
+                    } else {
+                        Image(systemName: "person.crop.circle.badge.checkmark")
+                            .font(.footnote.weight(.semibold))
+                    }
+
+                    Text(isSubmitting ? "登录中" : "登录")
+                        .font(.body.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.Colors.title)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(AppTheme.Colors.cardSurfaceGradient(.primary, accent: AppTheme.Colors.softAccent))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(AppTheme.Colors.divider, lineWidth: 1)
+            )
+            .disabled(canSubmit == false || isSubmitting)
+            .opacity(canSubmit == false || isSubmitting ? 0.72 : 1)
+
+            Button {
+                guard isSubmitting == false else { return }
+                onCompletion(.continueLocally)
+            } label: {
+                Text("单人本地使用")
+                    .font(.body.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.Colors.deepAccent)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(AppTheme.Colors.cardSurface(.tertiary))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(AppTheme.Colors.divider, lineWidth: 1)
+            )
+            .disabled(isSubmitting)
+        }
+        .padding(.horizontal, AppTheme.Spacing.page)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .background(.ultraThinMaterial)
     }
 
     private var canSubmit: Bool {
@@ -1279,6 +1461,43 @@ private struct AccountLoginSheet: View {
         password.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func accountInputField(
+        title: String,
+        text: Binding<String>,
+        prompt: String,
+        textContentType: UITextContentType?,
+        keyboardType: UIKeyboardType,
+        isSecure: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.deepAccent)
+
+            Group {
+                if isSecure {
+                    SecureField(prompt, text: text)
+                } else {
+                    TextField(prompt, text: text)
+                        .keyboardType(keyboardType)
+                }
+            }
+            .textContentType(textContentType)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(.body)
+            .foregroundStyle(AppTheme.Colors.title)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .background(AppTheme.Colors.cardSurface(.secondary))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(AppTheme.Colors.divider, lineWidth: 1)
+            )
+        }
+    }
+
     private func submit() {
         guard canSubmit else {
             errorText = "请先填写邮箱和密码。"
@@ -1290,13 +1509,18 @@ private struct AccountLoginSheet: View {
 
         Task {
             do {
-                try await syncService.loginWithBackend(
+                let payload = try await syncService.loginWithBackend(
                     email: normalizedEmail,
                     password: normalizedPassword
                 )
+                await relationshipStore.adoptAuthenticatedRelationship(
+                    activeSpaceID: payload.activeSpaceId
+                )
+
+                let nextAction = relationshipStore.state.isBound ? AccountLoginCompletionAction.returnToMainExperience : .openRelationshipSetup
                 await MainActor.run {
                     isSubmitting = false
-                    dismiss()
+                    onCompletion(nextAction)
                 }
             } catch {
                 await MainActor.run {
@@ -1329,7 +1553,8 @@ private enum AccountSyncRehearsalFixtures {
             displayName: displayName,
             providerName: "余白",
             accountHint: "本地 mock 真实登录返回",
-            accessToken: nil
+            accessToken: nil,
+            activeSpaceId: nil
         )
     }
 

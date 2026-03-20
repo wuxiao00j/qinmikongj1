@@ -136,20 +136,20 @@ enum AccountSessionSource: String, Codable {
     var label: String {
         switch self {
         case .none:
-            return "未开启账号"
+            return "未登录"
         case .demo:
-            return "开发接入"
+            return "本地使用"
         case .authenticated:
-            return "已连接账号"
+            return "已登录账号"
         }
     }
 
     var productLabel: String {
         switch self {
         case .none:
-            return "未开启账号"
+            return "未登录"
         case .demo:
-            return "开发接入已开启"
+            return "本地使用中"
         case .authenticated:
             return "账号已连接"
         }
@@ -158,9 +158,9 @@ enum AccountSessionSource: String, Codable {
     var systemImage: String {
         switch self {
         case .none:
-            return "iphone"
+            return "person.crop.circle"
         case .demo:
-            return "wrench.and.screwdriver"
+            return "iphone"
         case .authenticated:
             return "person.crop.circle.badge.checkmark"
         }
@@ -169,9 +169,9 @@ enum AccountSessionSource: String, Codable {
     var productDescription: String {
         switch self {
         case .none:
-            return "当前仍以本机保存为主，还没有开启账号会话。"
+            return "当前仍以本机保存为主，需要时再登录账号即可。"
         case .demo:
-            return "当前使用的是开发接入账号，主要用于测试联调；普通用户主路径仍应从正式登录入口进入。"
+            return "当前仍以本机保存为主，内容会先留在这台设备里。"
         case .authenticated:
             return "这里已经接入一份可用账号，会继续沿着这条状态线展示云端连接和同步结果。"
         }
@@ -211,6 +211,7 @@ struct AuthenticatedAccountPayload: Codable, Equatable {
     let providerName: String
     let accountHint: String?
     let accessToken: String?
+    let activeSpaceId: String?
 }
 
 struct AccountSessionAuthorization: Codable, Equatable {
@@ -927,7 +928,8 @@ struct LocalBackendAccountLoginClient {
                 displayName: payload.displayName,
                 providerName: payload.providerName,
                 accountHint: payload.accountHint,
-                accessToken: token
+                accessToken: token,
+                activeSpaceId: payload.activeSpaceId
             )
         } catch let loginError as LocalBackendAccountLoginError {
             throw loginError
@@ -1043,7 +1045,8 @@ struct LocalBackendDemoLoginClient {
                 displayName: payload.displayName,
                 providerName: payload.providerName,
                 accountHint: payload.accountHint,
-                accessToken: token
+                accessToken: token,
+                activeSpaceId: payload.activeSpaceId
             )
         } catch let loginError as LocalBackendDemoLoginError {
             throw loginError
@@ -2048,7 +2051,7 @@ final class AppSyncService: ObservableObject {
         publishStatus()
     }
 
-    func loginWithBackend(email: String, password: String) async throws {
+    func loginWithBackend(email: String, password: String) async throws -> AuthenticatedAccountPayload {
         isSyncing = true
         latestErrorText = nil
         latestEventText = "正在登录账号"
@@ -2061,6 +2064,7 @@ final class AppSyncService: ObservableObject {
             latestEventText = "已登录 \(payload.displayName)，当前会话会继续沿用这份账号"
             isSyncing = false
             publishStatus()
+            return payload
         } catch {
             latestErrorText = error.localizedDescription
             latestEventText = "这次没有登录成功"
