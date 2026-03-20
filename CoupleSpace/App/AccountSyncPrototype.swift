@@ -411,7 +411,9 @@ struct SyncContentPayload {
     let memoryTombstones: [MemoryDeletionTombstone]
     let wishes: [PlaceWish]
     let wishTombstones: [WishDeletionTombstone]
+    let anniversaryTombstones: [AnniversaryDeletionTombstone]
     let anniversaries: [AnniversaryItem]
+    let weeklyTodoTombstones: [WeeklyTodoDeletionTombstone]
     let weeklyTodos: [WeeklyTodoItem]
     let tonightDinners: [TonightDinnerOption]
     let rituals: [RitualItem]
@@ -467,7 +469,9 @@ struct SyncContentPayload {
             memoryTombstones: payload.memoryTombstones,
             wishes: payload.wishes,
             wishTombstones: payload.wishTombstones,
+            anniversaryTombstones: payload.anniversaryTombstones,
             anniversaries: payload.anniversaries,
+            weeklyTodoTombstones: payload.weeklyTodoTombstones,
             weeklyTodos: payload.weeklyTodos,
             tonightDinners: payload.tonightDinners,
             rituals: payload.rituals,
@@ -492,7 +496,9 @@ struct RemoteSyncSnapshotPayload {
     let memoryTombstones: [MemoryDeletionTombstone]
     let wishes: [PlaceWish]
     let wishTombstones: [WishDeletionTombstone]
+    let anniversaryTombstones: [AnniversaryDeletionTombstone]
     let anniversaries: [AnniversaryItem]
+    let weeklyTodoTombstones: [WeeklyTodoDeletionTombstone]
     let weeklyTodos: [WeeklyTodoItem]
     let tonightDinners: [TonightDinnerOption]
     let rituals: [RitualItem]
@@ -1304,7 +1310,9 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
     let memoryTombstones: [StoredRemoteMemoryTombstone]
     let wishes: [StoredRemoteWish]
     let wishTombstones: [StoredRemoteWishTombstone]
+    let anniversaryTombstones: [StoredRemoteAnniversaryTombstone]
     let anniversaries: [StoredRemoteAnniversary]
+    let weeklyTodoTombstones: [StoredRemoteWeeklyTodoTombstone]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
     let tonightDinners: [StoredRemoteTonightDinner]
     let rituals: [StoredRemoteRitual]
@@ -1325,7 +1333,9 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         case memoryTombstones
         case wishes
         case wishTombstones
+        case anniversaryTombstones
         case anniversaries
+        case weeklyTodoTombstones
         case weeklyTodos
         case tonightDinners
         case rituals
@@ -1350,7 +1360,9 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
         memoryTombstones = try container.decodeIfPresent([StoredRemoteMemoryTombstone].self, forKey: .memoryTombstones) ?? []
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
         wishTombstones = try container.decodeIfPresent([StoredRemoteWishTombstone].self, forKey: .wishTombstones) ?? []
+        anniversaryTombstones = try container.decodeIfPresent([StoredRemoteAnniversaryTombstone].self, forKey: .anniversaryTombstones) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
+        weeklyTodoTombstones = try container.decodeIfPresent([StoredRemoteWeeklyTodoTombstone].self, forKey: .weeklyTodoTombstones) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
         tonightDinners = try container.decodeIfPresent([StoredRemoteTonightDinner].self, forKey: .tonightDinners) ?? []
         rituals = try container.decodeIfPresent([StoredRemoteRitual].self, forKey: .rituals) ?? []
@@ -1417,7 +1429,9 @@ private struct RealSyncRemoteSnapshotResponse: Decodable {
             memoryTombstones: memoryTombstones.map(\.model),
             wishes: wishes.map(\.model),
             wishTombstones: wishTombstones.map(\.model),
+            anniversaryTombstones: anniversaryTombstones.map(\.model),
             anniversaries: anniversaries.map(\.model),
+            weeklyTodoTombstones: weeklyTodoTombstones.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
             tonightDinners: tonightDinners.map(\.model),
             rituals: rituals.map(\.model),
@@ -2206,7 +2220,9 @@ final class AppSyncService: ObservableObject {
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
         wishTombstones: [WishDeletionTombstone],
+        anniversaryTombstones: [AnniversaryDeletionTombstone],
         anniversaries: [AnniversaryItem],
+        weeklyTodoTombstones: [WeeklyTodoDeletionTombstone],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
         rituals: [RitualItem],
@@ -2236,7 +2252,9 @@ final class AppSyncService: ObservableObject {
             memoryTombstones: memoryTombstones,
             wishes: wishes,
             wishTombstones: wishTombstones,
+            anniversaryTombstones: anniversaryTombstones,
             anniversaries: anniversaries,
+            weeklyTodoTombstones: weeklyTodoTombstones,
             weeklyTodos: weeklyTodos,
             tonightDinners: tonightDinners,
             rituals: rituals,
@@ -2331,7 +2349,9 @@ final class AppSyncService: ObservableObject {
                 memoryTombstones: memoryTombstones,
                 wishes: wishes,
                 wishTombstones: wishTombstones,
+                anniversaryTombstones: anniversaryTombstones,
                 anniversaries: anniversaries,
+                weeklyTodoTombstones: weeklyTodoTombstones,
                 weeklyTodos: weeklyTodos,
                 tonightDinners: tonightDinners,
                 rituals: rituals,
@@ -2362,7 +2382,9 @@ final class AppSyncService: ObservableObject {
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
         wishTombstones: [WishDeletionTombstone],
+        anniversaryTombstones: [AnniversaryDeletionTombstone],
         anniversaries: [AnniversaryItem],
+        weeklyTodoTombstones: [WeeklyTodoDeletionTombstone],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
         rituals: [RitualItem],
@@ -2381,7 +2403,9 @@ final class AppSyncService: ObservableObject {
             memoryTombstones: memoryTombstones,
             wishes: wishes,
             wishTombstones: wishTombstones,
+            anniversaryTombstones: anniversaryTombstones,
             anniversaries: anniversaries,
+            weeklyTodoTombstones: weeklyTodoTombstones,
             weeklyTodos: weeklyTodos,
             tonightDinners: tonightDinners,
             rituals: rituals,
@@ -2500,7 +2524,9 @@ final class AppSyncService: ObservableObject {
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
         wishTombstones: [WishDeletionTombstone],
+        anniversaryTombstones: [AnniversaryDeletionTombstone],
         anniversaries: [AnniversaryItem],
+        weeklyTodoTombstones: [WeeklyTodoDeletionTombstone],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
         rituals: [RitualItem],
@@ -2510,14 +2536,18 @@ final class AppSyncService: ObservableObject {
     ) -> SyncContentPayload {
         let deletedMemoryIDs = Set(memoryTombstones.map(\.id))
         let deletedWishIDs = Set(wishTombstones.map(\.id))
+        let deletedAnniversaryIDs = Set(anniversaryTombstones.map(\.id))
+        let deletedWeeklyTodoIDs = Set(weeklyTodoTombstones.map(\.id))
         return SyncContentPayload(
             scope: scope,
             memories: memories.filter { deletedMemoryIDs.contains($0.id) == false },
             memoryTombstones: memoryTombstones,
             wishes: wishes.filter { deletedWishIDs.contains($0.id) == false },
             wishTombstones: wishTombstones,
-            anniversaries: anniversaries,
-            weeklyTodos: weeklyTodos,
+            anniversaryTombstones: anniversaryTombstones,
+            anniversaries: anniversaries.filter { deletedAnniversaryIDs.contains($0.id) == false },
+            weeklyTodoTombstones: weeklyTodoTombstones,
+            weeklyTodos: weeklyTodos.filter { deletedWeeklyTodoIDs.contains($0.id) == false },
             tonightDinners: tonightDinners,
             rituals: rituals,
             currentStatuses: currentStatuses,
@@ -2683,7 +2713,9 @@ final class AppSyncService: ObservableObject {
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
         wishTombstones: [WishDeletionTombstone],
+        anniversaryTombstones: [AnniversaryDeletionTombstone],
         anniversaries: [AnniversaryItem],
+        weeklyTodoTombstones: [WeeklyTodoDeletionTombstone],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
         rituals: [RitualItem],
@@ -2701,7 +2733,9 @@ final class AppSyncService: ObservableObject {
             memoryTombstones: memoryTombstones,
             wishes: wishes,
             wishTombstones: wishTombstones,
+            anniversaryTombstones: anniversaryTombstones,
             anniversaries: anniversaries,
+            weeklyTodoTombstones: weeklyTodoTombstones,
             weeklyTodos: weeklyTodos,
             tonightDinners: tonightDinners,
             rituals: rituals,
@@ -2827,6 +2861,7 @@ final class AppSyncService: ObservableObject {
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
         wishTombstones: [WishDeletionTombstone],
+        anniversaryTombstones: [AnniversaryDeletionTombstone],
         anniversaries: [AnniversaryItem],
         weeklyTodoStore: WeeklyTodoStore,
         tonightDinnerStore: TonightDinnerStore,
@@ -2836,6 +2871,7 @@ final class AppSyncService: ObservableObject {
         scope: AppContentScope
     ) async -> Bool {
         let resolvedWeeklyTodos = weeklyTodoStore.items(in: scope)
+        let resolvedWeeklyTodoTombstones = weeklyTodoStore.deletionTombstones(in: scope)
         let resolvedTonightDinners = tonightDinnerStore.items(in: scope)
         let resolvedRituals = ritualStore.items(in: scope)
         let resolvedCurrentStatuses = currentStatusStore.items(in: scope)
@@ -2846,7 +2882,9 @@ final class AppSyncService: ObservableObject {
             memoryTombstones: memoryTombstones,
             wishes: wishes,
             wishTombstones: wishTombstones,
+            anniversaryTombstones: anniversaryTombstones,
             anniversaries: anniversaries,
+            weeklyTodoTombstones: resolvedWeeklyTodoTombstones,
             weeklyTodos: resolvedWeeklyTodos,
             tonightDinners: resolvedTonightDinners,
             rituals: resolvedRituals,
@@ -2864,7 +2902,9 @@ final class AppSyncService: ObservableObject {
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
         wishTombstones: [WishDeletionTombstone],
+        anniversaryTombstones: [AnniversaryDeletionTombstone],
         anniversaries: [AnniversaryItem],
+        weeklyTodoTombstones: [WeeklyTodoDeletionTombstone],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
         rituals: [RitualItem],
@@ -2891,7 +2931,9 @@ final class AppSyncService: ObservableObject {
                 memoryTombstones: memoryTombstones,
                 wishes: wishes,
                 wishTombstones: wishTombstones,
+                anniversaryTombstones: anniversaryTombstones,
                 anniversaries: anniversaries,
+                weeklyTodoTombstones: weeklyTodoTombstones,
                 weeklyTodos: weeklyTodos,
                 tonightDinners: tonightDinners,
                 rituals: rituals,
@@ -3036,8 +3078,20 @@ final class AppSyncService: ObservableObject {
             "apply begin space=\(applyScope.spaceId) payloadUpdatedAt=\(latestPulledPayload.updatedAt.timeIntervalSince1970) localBefore=\(wishDebugSummary(localBeforeWishes)) remote=\(wishDebugSummary(remoteEffectiveWishes)) tombstones=\(wishTombstoneDebugSummary(effectiveWishTombstones))"
         )
         wishStore.mergeRemoteWishes(in: applyScope, with: remoteEffectiveWishes)
-        anniversaryStore.replaceAnniversaries(in: applyScope, with: latestPulledPayload.anniversaries)
-        weeklyTodoStore.mergeRemoteItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
+        let effectiveAnniversaryTombstones = anniversaryStore.mergeDeletionTombstones(
+            in: applyScope,
+            with: latestPulledPayload.anniversaryTombstones
+        )
+        let deletedAnniversaryIDs = Set(effectiveAnniversaryTombstones.map(\.id))
+        let remoteEffectiveAnniversaries = latestPulledPayload.anniversaries.filter { deletedAnniversaryIDs.contains($0.id) == false }
+        anniversaryStore.mergeRemoteAnniversaries(in: applyScope, with: remoteEffectiveAnniversaries)
+        let effectiveWeeklyTodoTombstones = weeklyTodoStore.mergeDeletionTombstones(
+            in: applyScope,
+            with: latestPulledPayload.weeklyTodoTombstones
+        )
+        let deletedWeeklyTodoIDs = Set(effectiveWeeklyTodoTombstones.map(\.id))
+        let remoteEffectiveWeeklyTodos = latestPulledPayload.weeklyTodos.filter { deletedWeeklyTodoIDs.contains($0.id) == false }
+        weeklyTodoStore.mergeRemoteItems(in: applyScope, with: remoteEffectiveWeeklyTodos)
         tonightDinnerStore.replaceItems(in: applyScope, with: latestPulledPayload.tonightDinners)
         ritualStore.replaceItems(in: applyScope, with: latestPulledPayload.rituals)
         currentStatusStore.replaceStatuses(in: applyScope, with: latestPulledPayload.currentStatuses)
@@ -3605,7 +3659,9 @@ private extension AppSyncService {
         memoryTombstones: [MemoryDeletionTombstone],
         wishes: [PlaceWish],
         wishTombstones: [WishDeletionTombstone],
+        anniversaryTombstones: [AnniversaryDeletionTombstone],
         anniversaries: [AnniversaryItem],
+        weeklyTodoTombstones: [WeeklyTodoDeletionTombstone],
         weeklyTodos: [WeeklyTodoItem],
         tonightDinners: [TonightDinnerOption],
         rituals: [RitualItem],
@@ -3644,9 +3700,17 @@ private extension AppSyncService {
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)" }
             .joined(separator: ",")
+        let anniversaryTombstoneSignature = anniversaryTombstones
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.deletedAt.timeIntervalSince1970)|\($0.deletedByUserId)" }
+            .joined(separator: ",")
         let weeklyTodoSignature = weeklyTodos
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { "\($0.id.uuidString)|\($0.updatedAt.timeIntervalSince1970)|\($0.isCompleted)" }
+            .joined(separator: ",")
+        let weeklyTodoTombstoneSignature = weeklyTodoTombstones
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.deletedAt.timeIntervalSince1970)|\($0.deletedByUserId)" }
             .joined(separator: ",")
         let tonightDinnerSignature = tonightDinners
             .sorted { $0.id.uuidString < $1.id.uuidString }
@@ -3675,7 +3739,9 @@ private extension AppSyncService {
             wishSignature,
             wishTombstoneSignature,
             anniversarySignature,
+            anniversaryTombstoneSignature,
             weeklyTodoSignature,
+            weeklyTodoTombstoneSignature,
             tonightDinnerSignature,
             ritualSignature,
             currentStatusSignature,
@@ -3690,7 +3756,9 @@ private struct StoredRemotePayload: Codable {
     let memoryTombstones: [StoredRemoteMemoryTombstone]
     let wishes: [StoredRemoteWish]
     let wishTombstones: [StoredRemoteWishTombstone]
+    let anniversaryTombstones: [StoredRemoteAnniversaryTombstone]
     let anniversaries: [StoredRemoteAnniversary]
+    let weeklyTodoTombstones: [StoredRemoteWeeklyTodoTombstone]
     let weeklyTodos: [StoredRemoteWeeklyTodo]
     let tonightDinners: [StoredRemoteTonightDinner]
     let rituals: [StoredRemoteRitual]
@@ -3705,7 +3773,9 @@ private struct StoredRemotePayload: Codable {
         case memoryTombstones
         case wishes
         case wishTombstones
+        case anniversaryTombstones
         case anniversaries
+        case weeklyTodoTombstones
         case weeklyTodos
         case tonightDinners
         case rituals
@@ -3721,7 +3791,9 @@ private struct StoredRemotePayload: Codable {
         memoryTombstones = payload.memoryTombstones.map(StoredRemoteMemoryTombstone.init)
         wishes = payload.wishes.map(StoredRemoteWish.init)
         wishTombstones = payload.wishTombstones.map(StoredRemoteWishTombstone.init)
+        anniversaryTombstones = payload.anniversaryTombstones.map(StoredRemoteAnniversaryTombstone.init)
         anniversaries = payload.anniversaries.map(StoredRemoteAnniversary.init)
+        weeklyTodoTombstones = payload.weeklyTodoTombstones.map(StoredRemoteWeeklyTodoTombstone.init)
         weeklyTodos = payload.weeklyTodos.map(StoredRemoteWeeklyTodo.init)
         tonightDinners = payload.tonightDinners.map(StoredRemoteTonightDinner.init)
         rituals = payload.rituals.map(StoredRemoteRitual.init)
@@ -3738,7 +3810,9 @@ private struct StoredRemotePayload: Codable {
         memoryTombstones = try container.decodeIfPresent([StoredRemoteMemoryTombstone].self, forKey: .memoryTombstones) ?? []
         wishes = try container.decodeIfPresent([StoredRemoteWish].self, forKey: .wishes) ?? []
         wishTombstones = try container.decodeIfPresent([StoredRemoteWishTombstone].self, forKey: .wishTombstones) ?? []
+        anniversaryTombstones = try container.decodeIfPresent([StoredRemoteAnniversaryTombstone].self, forKey: .anniversaryTombstones) ?? []
         anniversaries = try container.decodeIfPresent([StoredRemoteAnniversary].self, forKey: .anniversaries) ?? []
+        weeklyTodoTombstones = try container.decodeIfPresent([StoredRemoteWeeklyTodoTombstone].self, forKey: .weeklyTodoTombstones) ?? []
         weeklyTodos = try container.decodeIfPresent([StoredRemoteWeeklyTodo].self, forKey: .weeklyTodos) ?? []
         tonightDinners = try container.decodeIfPresent([StoredRemoteTonightDinner].self, forKey: .tonightDinners) ?? []
         rituals = try container.decodeIfPresent([StoredRemoteRitual].self, forKey: .rituals) ?? []
@@ -3771,7 +3845,9 @@ private struct StoredRemotePayload: Codable {
             memoryTombstones: memoryTombstones.map(\.model),
             wishes: wishes.map(\.model),
             wishTombstones: wishTombstones.map(\.model),
+            anniversaryTombstones: anniversaryTombstones.map(\.model),
             anniversaries: anniversaries.map(\.model),
+            weeklyTodoTombstones: weeklyTodoTombstones.map(\.model),
             weeklyTodos: weeklyTodos.map(\.model),
             tonightDinners: tonightDinners.map(\.model),
             rituals: rituals.map(\.model),
@@ -3979,6 +4055,29 @@ private struct StoredRemoteWishTombstone: Codable {
     }
 }
 
+private struct StoredRemoteAnniversaryTombstone: Codable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(_ tombstone: AnniversaryDeletionTombstone) {
+        id = tombstone.id
+        spaceId = tombstone.spaceId
+        deletedByUserId = tombstone.deletedByUserId
+        deletedAt = tombstone.deletedAt
+    }
+
+    var model: AnniversaryDeletionTombstone {
+        AnniversaryDeletionTombstone(
+            id: id,
+            spaceId: spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
+        )
+    }
+}
+
 private struct StoredRemoteAnniversary: Codable {
     let id: UUID
     let title: String
@@ -4019,6 +4118,29 @@ private struct StoredRemoteAnniversary: Codable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             syncStatus: SyncStatus(rawValue: syncStatusRawValue) ?? .localOnly
+        )
+    }
+}
+
+private struct StoredRemoteWeeklyTodoTombstone: Codable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(_ tombstone: WeeklyTodoDeletionTombstone) {
+        id = tombstone.id
+        spaceId = tombstone.spaceId
+        deletedByUserId = tombstone.deletedByUserId
+        deletedAt = tombstone.deletedAt
+    }
+
+    var model: WeeklyTodoDeletionTombstone {
+        WeeklyTodoDeletionTombstone(
+            id: id,
+            spaceId: spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
         )
     }
 }

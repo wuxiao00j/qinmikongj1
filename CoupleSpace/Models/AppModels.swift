@@ -498,6 +498,25 @@ struct TonightDinnerOption: Identifiable {
     }()
 }
 
+struct AnniversaryDeletionTombstone: Identifiable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(
+        id: UUID,
+        spaceId: String = AppDataDefaults.localSpaceId,
+        deletedByUserId: String = AppDataDefaults.localUserId,
+        deletedAt: Date = .now
+    ) {
+        self.id = id
+        self.spaceId = spaceId
+        self.deletedByUserId = deletedByUserId
+        self.deletedAt = deletedAt
+    }
+}
+
 struct WeeklyPlanItem: Identifiable {
     let id = UUID()
     let title: String
@@ -714,6 +733,25 @@ struct PlaceWish: Identifiable {
             resolvedTargetTextUpdatedAt
         ].max() ?? resolvedUpdatedAt
         self.syncStatus = syncStatus
+    }
+}
+
+struct WeeklyTodoDeletionTombstone: Identifiable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(
+        id: UUID,
+        spaceId: String = AppDataDefaults.localSpaceId,
+        deletedByUserId: String = AppDataDefaults.localUserId,
+        deletedAt: Date = .now
+    ) {
+        self.id = id
+        self.spaceId = spaceId
+        self.deletedByUserId = deletedByUserId
+        self.deletedAt = deletedAt
     }
 }
 
@@ -1068,7 +1106,7 @@ struct MemoryTimelineEntry: Identifiable {
     }
 
     var recordContextText: String {
-        var fragments = ["写于 \(monthDayText)"]
+        var fragments = [monthDayText]
 
         if updatedAt.timeIntervalSince(createdAt) > 60 {
             fragments.append("后来补充过")

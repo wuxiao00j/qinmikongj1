@@ -716,9 +716,11 @@ final class WishStore: ObservableObject {
 @MainActor
 final class AnniversaryStore: ObservableObject {
     @Published private(set) var anniversaries: [AnniversaryItem] = []
+    @Published private(set) var deletionTombstones: [AnniversaryDeletionTombstone] = []
 
     private let defaults: UserDefaults
     private let storageKey = "com.barry.CoupleSpace.anniversaries"
+    private let deletionStorageKey = "com.barry.CoupleSpace.anniversaryDeletionTombstones"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -726,13 +728,20 @@ final class AnniversaryStore: ObservableObject {
     }
 
     var hasPersistedAnniversaries: Bool {
-        !anniversaries.isEmpty
+        !anniversaries.isEmpty || !deletionTombstones.isEmpty
     }
 
     func anniversaries(in scope: AppContentScope) -> [AnniversaryItem] {
-        anniversaries
-            .filter { $0.matches(scope: scope) }
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        return anniversaries
+            .filter { $0.matches(scope: scope) && deletedIDs.contains($0.id) == false }
             .sorted(by: AnniversaryItem.reminderSort(_:_:))
+    }
+
+    func deletionTombstones(in scope: AppContentScope) -> [AnniversaryDeletionTombstone] {
+        deletionTombstones
+            .filter { $0.matches(scope: scope) }
+            .sorted { $0.deletedAt > $1.deletedAt }
     }
 
     func add(_ item: AnniversaryItem, in scope: AppContentScope) {
@@ -759,22 +768,86 @@ final class AnniversaryStore: ObservableObject {
     }
 
     func delete(_ itemID: UUID, in scope: AppContentScope) {
+        let scopedAnniversaries = anniversaries.filter { $0.matches(scope: scope) }
         let originalCount = anniversaries.count
         anniversaries.removeAll { $0.id == itemID && $0.matches(scope: scope) }
-        guard anniversaries.count != originalCount else { return }
+        guard anniversaries.count != originalCount || scopedAnniversaries.contains(where: { $0.id == itemID }) else { return }
+        upsertDeletionTombstone(
+            AnniversaryDeletionTombstone(
+                id: itemID,
+                spaceId: scope.spaceId,
+                deletedByUserId: scope.currentUserId
+            ),
+            in: scope
+        )
         save()
     }
 
     func replaceAnniversaries(in scope: AppContentScope, with importedItems: [AnniversaryItem]) {
         anniversaries.removeAll { $0.matches(scope: scope) }
+        deletionTombstones.removeAll { $0.matches(scope: scope) }
         anniversaries.append(contentsOf: importedItems.map { $0.preparedForScopeReplacement(in: scope) })
         anniversaries.sort(by: AnniversaryItem.reminderSort(_:_:))
         save()
     }
 
+    func mergeRemoteAnniversaries(in scope: AppContentScope, with importedItems: [AnniversaryItem]) {
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        let localScopedItems = anniversaries.filter { $0.matches(scope: scope) }
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: localScopedItems
+                .filter { deletedIDs.contains($0.id) == false }
+                .map { ($0.id, $0) }
+        )
+
+        for importedItem in importedItems {
+            guard deletedIDs.contains(importedItem.id) == false else { continue }
+            let preparedItem = importedItem.preparedForScopeReplacement(in: scope)
+            if let existingItem = mergedByID[preparedItem.id],
+               existingItem.updatedAt > preparedItem.updatedAt {
+                continue
+            }
+            mergedByID[preparedItem.id] = preparedItem
+        }
+
+        anniversaries.removeAll { $0.matches(scope: scope) }
+        anniversaries.append(contentsOf: mergedByID.values)
+        anniversaries.sort(by: AnniversaryItem.reminderSort(_:_:))
+        save()
+    }
+
+    @discardableResult
+    func mergeDeletionTombstones(
+        in scope: AppContentScope,
+        with importedTombstones: [AnniversaryDeletionTombstone]
+    ) -> [AnniversaryDeletionTombstone] {
+        let keptTombstones = deletionTombstones.filter { !$0.matches(scope: scope) }
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: deletionTombstones(in: scope).map { ($0.id, $0) }
+        )
+
+        for tombstone in importedTombstones {
+            guard tombstone.matches(scope: scope) else { continue }
+            if let existing = mergedByID[tombstone.id], existing.deletedAt >= tombstone.deletedAt {
+                continue
+            }
+            mergedByID[tombstone.id] = tombstone.preparedForScopeReplacement(in: scope)
+        }
+
+        let mergedTombstones = mergedByID.values.sorted { $0.deletedAt > $1.deletedAt }
+        deletionTombstones = keptTombstones + mergedTombstones
+
+        let deletedIDs = Set(mergedTombstones.map(\.id))
+        anniversaries.removeAll { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
+        anniversaries.sort(by: AnniversaryItem.reminderSort(_:_:))
+        save()
+        return mergedTombstones
+    }
+
     private func load() {
         guard let data = defaults.data(forKey: storageKey) else {
             anniversaries = []
+            loadDeletionTombstones()
             return
         }
 
@@ -788,6 +861,8 @@ final class AnniversaryStore: ObservableObject {
         } catch {
             anniversaries = []
         }
+
+        loadDeletionTombstones()
     }
 
     private func save() {
@@ -796,18 +871,55 @@ final class AnniversaryStore: ObservableObject {
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(anniversaries.map { StoredAnniversary(item: $0) })
             defaults.set(data, forKey: storageKey)
+            let tombstoneData = try encoder.encode(
+                deletionTombstones.map { StoredAnniversaryDeletionTombstone(tombstone: $0) }
+            )
+            defaults.set(tombstoneData, forKey: deletionStorageKey)
         } catch {
             assertionFailure("Failed to save anniversaries: \(error)")
         }
+    }
+
+    private func loadDeletionTombstones() {
+        guard let data = defaults.data(forKey: deletionStorageKey) else {
+            deletionTombstones = []
+            return
+        }
+
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let decoded = try decoder.decode([StoredAnniversaryDeletionTombstone].self, from: data)
+            deletionTombstones = decoded
+                .map(\.model)
+                .sorted { $0.deletedAt > $1.deletedAt }
+        } catch {
+            deletionTombstones = []
+        }
+    }
+
+    private func upsertDeletionTombstone(_ tombstone: AnniversaryDeletionTombstone, in scope: AppContentScope) {
+        let preparedTombstone = tombstone.preparedForScopeReplacement(in: scope)
+        if let index = deletionTombstones.firstIndex(where: { $0.id == preparedTombstone.id && $0.matches(scope: scope) }) {
+            if deletionTombstones[index].deletedAt >= preparedTombstone.deletedAt {
+                return
+            }
+            deletionTombstones[index] = preparedTombstone
+        } else {
+            deletionTombstones.append(preparedTombstone)
+        }
+        deletionTombstones.sort { $0.deletedAt > $1.deletedAt }
     }
 }
 
 @MainActor
 final class WeeklyTodoStore: ObservableObject {
     @Published private(set) var items: [WeeklyTodoItem] = []
+    @Published private(set) var deletionTombstones: [WeeklyTodoDeletionTombstone] = []
 
     private let defaults: UserDefaults
     private let storageKey = "com.barry.CoupleSpace.weeklyTodoItems"
+    private let deletionStorageKey = "com.barry.CoupleSpace.weeklyTodoDeletionTombstones"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -815,9 +927,16 @@ final class WeeklyTodoStore: ObservableObject {
     }
 
     func items(in scope: AppContentScope) -> [WeeklyTodoItem] {
-        self.items
-            .filter { $0.matches(scope: scope) }
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
+        return self.items
+            .filter { $0.matches(scope: scope) && deletedIDs.contains($0.id) == false }
             .sorted(by: WeeklyTodoStore.compareItems(_:_:))
+    }
+
+    func deletionTombstones(in scope: AppContentScope) -> [WeeklyTodoDeletionTombstone] {
+        deletionTombstones
+            .filter { $0.matches(scope: scope) }
+            .sorted { $0.deletedAt > $1.deletedAt }
     }
 
     func add(_ item: WeeklyTodoItem, in scope: AppContentScope) {
@@ -855,26 +974,40 @@ final class WeeklyTodoStore: ObservableObject {
     }
 
     func delete(_ itemID: UUID, in scope: AppContentScope) {
+        let scopedItems = items.filter { $0.matches(scope: scope) }
         let originalCount = items.count
         items.removeAll { $0.id == itemID && $0.matches(scope: scope) }
-        guard items.count != originalCount else { return }
+        guard items.count != originalCount || scopedItems.contains(where: { $0.id == itemID }) else { return }
+        upsertDeletionTombstone(
+            WeeklyTodoDeletionTombstone(
+                id: itemID,
+                spaceId: scope.spaceId,
+                deletedByUserId: scope.currentUserId
+            ),
+            in: scope
+        )
         save()
     }
 
     func replaceItems(in scope: AppContentScope, with importedItems: [WeeklyTodoItem]) {
         items.removeAll { $0.matches(scope: scope) }
+        deletionTombstones.removeAll { $0.matches(scope: scope) }
         items.append(contentsOf: importedItems.map { $0.preparedForScopeReplacement(in: scope) })
         items.sort(by: WeeklyTodoStore.compareItems(_:_:))
         save()
     }
 
     func mergeRemoteItems(in scope: AppContentScope, with importedItems: [WeeklyTodoItem]) {
+        let deletedIDs = Set(deletionTombstones(in: scope).map(\.id))
         let localScopedItems = items.filter { $0.matches(scope: scope) }
         var mergedByID = Dictionary(
-            uniqueKeysWithValues: localScopedItems.map { ($0.id, $0) }
+            uniqueKeysWithValues: localScopedItems
+                .filter { deletedIDs.contains($0.id) == false }
+                .map { ($0.id, $0) }
         )
 
         for importedItem in importedItems {
+            guard deletedIDs.contains(importedItem.id) == false else { continue }
             let preparedItem = importedItem.preparedForScopeReplacement(in: scope)
             if let existingItem = mergedByID[preparedItem.id],
                existingItem.updatedAt > preparedItem.updatedAt {
@@ -889,9 +1022,38 @@ final class WeeklyTodoStore: ObservableObject {
         save()
     }
 
+    @discardableResult
+    func mergeDeletionTombstones(
+        in scope: AppContentScope,
+        with importedTombstones: [WeeklyTodoDeletionTombstone]
+    ) -> [WeeklyTodoDeletionTombstone] {
+        let keptTombstones = deletionTombstones.filter { !$0.matches(scope: scope) }
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: deletionTombstones(in: scope).map { ($0.id, $0) }
+        )
+
+        for tombstone in importedTombstones {
+            guard tombstone.matches(scope: scope) else { continue }
+            if let existing = mergedByID[tombstone.id], existing.deletedAt >= tombstone.deletedAt {
+                continue
+            }
+            mergedByID[tombstone.id] = tombstone.preparedForScopeReplacement(in: scope)
+        }
+
+        let mergedTombstones = mergedByID.values.sorted { $0.deletedAt > $1.deletedAt }
+        deletionTombstones = keptTombstones + mergedTombstones
+
+        let deletedIDs = Set(mergedTombstones.map(\.id))
+        items.removeAll { $0.matches(scope: scope) && deletedIDs.contains($0.id) }
+        items.sort(by: WeeklyTodoStore.compareItems(_:_:))
+        save()
+        return mergedTombstones
+    }
+
     private func load() {
         guard let data = defaults.data(forKey: storageKey) else {
             items = []
+            loadDeletionTombstones()
             return
         }
 
@@ -903,6 +1065,8 @@ final class WeeklyTodoStore: ObservableObject {
         } catch {
             items = []
         }
+
+        loadDeletionTombstones()
     }
 
     private func save() {
@@ -911,9 +1075,44 @@ final class WeeklyTodoStore: ObservableObject {
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(items.map { StoredWeeklyTodo(item: $0) })
             defaults.set(data, forKey: storageKey)
+            let tombstoneData = try encoder.encode(
+                deletionTombstones.map { StoredWeeklyTodoDeletionTombstone(tombstone: $0) }
+            )
+            defaults.set(tombstoneData, forKey: deletionStorageKey)
         } catch {
             assertionFailure("Failed to save weekly todo items: \(error)")
         }
+    }
+
+    private func loadDeletionTombstones() {
+        guard let data = defaults.data(forKey: deletionStorageKey) else {
+            deletionTombstones = []
+            return
+        }
+
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let decoded = try decoder.decode([StoredWeeklyTodoDeletionTombstone].self, from: data)
+            deletionTombstones = decoded
+                .map(\.model)
+                .sorted { $0.deletedAt > $1.deletedAt }
+        } catch {
+            deletionTombstones = []
+        }
+    }
+
+    private func upsertDeletionTombstone(_ tombstone: WeeklyTodoDeletionTombstone, in scope: AppContentScope) {
+        let preparedTombstone = tombstone.preparedForScopeReplacement(in: scope)
+        if let index = deletionTombstones.firstIndex(where: { $0.id == preparedTombstone.id && $0.matches(scope: scope) }) {
+            if deletionTombstones[index].deletedAt >= preparedTombstone.deletedAt {
+                return
+            }
+            deletionTombstones[index] = preparedTombstone
+        } else {
+            deletionTombstones.append(preparedTombstone)
+        }
+        deletionTombstones.sort { $0.deletedAt > $1.deletedAt }
     }
 
     private static func compareItems(_ lhs: WeeklyTodoItem, _ rhs: WeeklyTodoItem) -> Bool {
@@ -1724,6 +1923,29 @@ private struct StoredAnniversary: Codable {
     }
 }
 
+private struct StoredAnniversaryDeletionTombstone: Codable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(tombstone: AnniversaryDeletionTombstone) {
+        id = tombstone.id
+        spaceId = tombstone.spaceId
+        deletedByUserId = tombstone.deletedByUserId
+        deletedAt = tombstone.deletedAt
+    }
+
+    var model: AnniversaryDeletionTombstone {
+        AnniversaryDeletionTombstone(
+            id: id,
+            spaceId: spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
+        )
+    }
+}
+
 private struct StoredWeeklyTodo: Codable {
     let id: UUID
     let title: String
@@ -1762,6 +1984,29 @@ private struct StoredWeeklyTodo: Codable {
             createdAt: resolvedCreatedAt,
             updatedAt: updatedAt ?? resolvedCreatedAt,
             syncStatus: SyncStatus(rawValue: syncStatusRawValue ?? "") ?? .localOnly
+        )
+    }
+}
+
+private struct StoredWeeklyTodoDeletionTombstone: Codable {
+    let id: UUID
+    let spaceId: String
+    let deletedByUserId: String
+    let deletedAt: Date
+
+    init(tombstone: WeeklyTodoDeletionTombstone) {
+        id = tombstone.id
+        spaceId = tombstone.spaceId
+        deletedByUserId = tombstone.deletedByUserId
+        deletedAt = tombstone.deletedAt
+    }
+
+    var model: WeeklyTodoDeletionTombstone {
+        WeeklyTodoDeletionTombstone(
+            id: id,
+            spaceId: spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
         )
     }
 }
@@ -2045,6 +2290,21 @@ private extension MemoryDeletionTombstone {
     }
 }
 
+private extension AnniversaryDeletionTombstone {
+    func matches(scope: AppContentScope) -> Bool {
+        spaceId == scope.spaceId || (scope.isSharedSpace && spaceId == AppDataDefaults.localSpaceId)
+    }
+
+    func preparedForScopeReplacement(in scope: AppContentScope) -> AnniversaryDeletionTombstone {
+        AnniversaryDeletionTombstone(
+            id: id,
+            spaceId: scope.spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
+        )
+    }
+}
+
 private extension PlaceWish {
     func matches(scope: AppContentScope) -> Bool {
         spaceId == scope.spaceId
@@ -2263,6 +2523,21 @@ private extension WishDeletionTombstone {
 
     func preparedForScopeReplacement(in scope: AppContentScope) -> WishDeletionTombstone {
         WishDeletionTombstone(
+            id: id,
+            spaceId: scope.spaceId,
+            deletedByUserId: deletedByUserId,
+            deletedAt: deletedAt
+        )
+    }
+}
+
+private extension WeeklyTodoDeletionTombstone {
+    func matches(scope: AppContentScope) -> Bool {
+        spaceId == scope.spaceId || (scope.isSharedSpace && spaceId == AppDataDefaults.localSpaceId)
+    }
+
+    func preparedForScopeReplacement(in scope: AppContentScope) -> WeeklyTodoDeletionTombstone {
+        WeeklyTodoDeletionTombstone(
             id: id,
             spaceId: scope.spaceId,
             deletedByUserId: deletedByUserId,

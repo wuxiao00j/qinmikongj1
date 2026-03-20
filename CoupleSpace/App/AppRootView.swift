@@ -77,7 +77,9 @@ struct AppRootView: View {
                     memoryTombstones: memoryStore.deletionTombstones(in: relationshipStore.contentScope),
                     wishes: wishStore.wishes(in: relationshipStore.contentScope),
                     wishTombstones: wishStore.deletionTombstones(in: relationshipStore.contentScope),
+                    anniversaryTombstones: anniversaryStore.deletionTombstones(in: relationshipStore.contentScope),
                     anniversaries: anniversaryStore.anniversaries(in: relationshipStore.contentScope),
+                    weeklyTodoTombstones: weeklyTodoStore.deletionTombstones(in: relationshipStore.contentScope),
                     weeklyTodos: weeklyTodoStore.items(in: relationshipStore.contentScope),
                     tonightDinners: tonightDinnerStore.items(in: relationshipStore.contentScope),
                     rituals: ritualStore.items(in: relationshipStore.contentScope),
@@ -125,7 +127,13 @@ struct AppRootView: View {
         .onReceive(anniversaryStore.$anniversaries.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .anniversariesChanged)
         }
+        .onReceive(anniversaryStore.$deletionTombstones.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .anniversariesChanged)
+        }
         .onReceive(weeklyTodoStore.$items.dropFirst()) { _ in
+            scheduleAutomaticPush(trigger: .weeklyTodosChanged)
+        }
+        .onReceive(weeklyTodoStore.$deletionTombstones.dropFirst()) { _ in
             scheduleAutomaticPush(trigger: .weeklyTodosChanged)
         }
         .onReceive(tonightDinnerStore.$items.dropFirst()) { _ in
@@ -216,7 +224,9 @@ struct AppRootView: View {
             memoryTombstones: memoryStore.deletionTombstones(in: scope),
             wishes: wishStore.wishes(in: scope),
             wishTombstones: wishStore.deletionTombstones(in: scope),
+            anniversaryTombstones: anniversaryStore.deletionTombstones(in: scope),
             anniversaries: anniversaryStore.anniversaries(in: scope),
+            weeklyTodoTombstones: weeklyTodoStore.deletionTombstones(in: scope),
             weeklyTodos: weeklyTodoStore.items(in: scope),
             tonightDinners: tonightDinnerStore.items(in: scope),
             rituals: ritualStore.items(in: scope),
