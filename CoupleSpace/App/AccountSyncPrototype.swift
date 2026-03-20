@@ -1974,6 +1974,7 @@ final class AppSyncService: ObservableObject {
     private var lastAutomaticPullAt: Date?
     private var automaticPushSuppressedUntil: Date?
     private var lastLocalSharedContentMutationAt: Date?
+    private var isApplyingLatestPulledContent = false
     private let automaticPushDebounceNanoseconds: UInt64 = 1_500_000_000
     private let automaticPullMinimumInterval: TimeInterval = 6
     private let automaticPullHeartbeatInterval: TimeInterval = 6
@@ -2218,6 +2219,11 @@ final class AppSyncService: ObservableObject {
             debugAutomaticPush("schedule skipped trigger=\(trigger.rawValue) reason=backend sync unavailable")
             return
         }
+        guard isApplyingLatestPulledContent == false else {
+            debugAutomaticPush("schedule skipped trigger=\(trigger.rawValue) reason=applying pulled content")
+            debugWishSync("schedule push skipped trigger=\(trigger.rawValue) scope=\(scope.spaceId) reason=applying pulled content")
+            return
+        }
         postPushConvergencePullTask?.cancel()
         postPushConvergencePullTask = nil
         deferredAutomaticApplyTask?.cancel()
@@ -2423,7 +2429,7 @@ final class AppSyncService: ObservableObject {
                 return
             }
 
-            if let staleReason = self.staleReasonForAutomaticApply(payload) {
+            if let staleReason = self.hardStaleReasonForAutomaticApply(payload) {
                 debugAutomaticPush(
                     "automatic pull payload marked stale trigger=\(trigger.rawValue) reason=\(staleReason)"
                 )
@@ -2998,6 +3004,10 @@ final class AppSyncService: ObservableObject {
 
         let applyScope = latestPulledPayload.scope
         debugWhisperSync("apply latest payload space=\(applyScope.spaceId) whisperNotes=\(latestPulledPayload.whisperNotes.count)")
+        isApplyingLatestPulledContent = true
+        defer {
+            isApplyingLatestPulledContent = false
+        }
         let localBeforeEntries = memoryStore.entries(in: applyScope)
         automaticPushSuppressedUntil = Date().addingTimeInterval(2)
         deferredAutomaticApplyTask?.cancel()
@@ -3328,7 +3338,7 @@ final class AppSyncService: ObservableObject {
             return nil
         }
 
-        if let staleReason = staleReasonForAutomaticApply(payload) {
+        if let staleReason = hardStaleReasonForAutomaticApply(payload) {
             debugAutomaticPush(
                 "automatic apply rejected stale payload reason=\(staleReason)"
             )
@@ -3344,6 +3354,10 @@ final class AppSyncService: ObservableObject {
         let now = Date()
         var requiredDelay: TimeInterval = 0
         var delayReasons: [String] = []
+        if hasPendingAutomaticPush {
+            requiredDelay = max(requiredDelay, 1)
+            delayReasons.append("pending automatic push")
+        }
         if let lastLocalSharedContentMutationAt,
            now.timeIntervalSince(lastLocalSharedContentMutationAt) < automaticApplyLocalMutationCooldown {
             let remaining = automaticApplyLocalMutationCooldown - now.timeIntervalSince(lastLocalSharedContentMutationAt)
@@ -3420,7 +3434,7 @@ final class AppSyncService: ObservableObject {
             guard !Task.isCancelled else { return }
             guard self.latestPulledPayload?.updatedAt == payload.updatedAt else { return }
             debugMemorySync("deferred apply wake payloadUpdatedAt=\(payload.updatedAt.timeIntervalSince1970)")
-            if let staleReason = self.staleReasonForAutomaticApply(payload) {
+            if let staleReason = self.hardStaleReasonForAutomaticApply(payload) {
                 debugAutomaticPush(
                     "deferred automatic apply dropped stale payload reason=\(staleReason)"
                 )
@@ -3485,15 +3499,11 @@ final class AppSyncService: ObservableObject {
     private func shouldTreatPulledPayloadAsStaleForAutomaticApply(
         _ payload: SyncContentPayload
     ) -> Bool {
-        staleReasonForAutomaticApply(payload) != nil
+        hardStaleReasonForAutomaticApply(payload) != nil
     }
 
-    private func staleReasonForAutomaticApply(_ payload: SyncContentPayload) -> String? {
+    private func hardStaleReasonForAutomaticApply(_ payload: SyncContentPayload) -> String? {
         var reasons: [String] = []
-
-        if hasPendingAutomaticPush {
-            reasons.append("hasPendingAutomaticPush")
-        }
 
         if let lastPushedSnapshotUpdatedAt,
            payload.updatedAt < lastPushedSnapshotUpdatedAt {
