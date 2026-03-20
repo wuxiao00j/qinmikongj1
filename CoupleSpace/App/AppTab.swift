@@ -868,6 +868,27 @@ final class WeeklyTodoStore: ObservableObject {
         save()
     }
 
+    func mergeRemoteItems(in scope: AppContentScope, with importedItems: [WeeklyTodoItem]) {
+        let localScopedItems = items.filter { $0.matches(scope: scope) }
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: localScopedItems.map { ($0.id, $0) }
+        )
+
+        for importedItem in importedItems {
+            let preparedItem = importedItem.preparedForScopeReplacement(in: scope)
+            if let existingItem = mergedByID[preparedItem.id],
+               existingItem.updatedAt > preparedItem.updatedAt {
+                continue
+            }
+            mergedByID[preparedItem.id] = preparedItem
+        }
+
+        items.removeAll { $0.matches(scope: scope) }
+        items.append(contentsOf: mergedByID.values)
+        items.sort(by: WeeklyTodoStore.compareItems(_:_:))
+        save()
+    }
+
     private func load() {
         guard let data = defaults.data(forKey: storageKey) else {
             items = []

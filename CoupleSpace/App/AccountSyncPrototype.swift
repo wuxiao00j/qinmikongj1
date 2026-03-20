@@ -3037,7 +3037,7 @@ final class AppSyncService: ObservableObject {
         )
         wishStore.mergeRemoteWishes(in: applyScope, with: remoteEffectiveWishes)
         anniversaryStore.replaceAnniversaries(in: applyScope, with: latestPulledPayload.anniversaries)
-        weeklyTodoStore.replaceItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
+        weeklyTodoStore.mergeRemoteItems(in: applyScope, with: latestPulledPayload.weeklyTodos)
         tonightDinnerStore.replaceItems(in: applyScope, with: latestPulledPayload.tonightDinners)
         ritualStore.replaceItems(in: applyScope, with: latestPulledPayload.rituals)
         currentStatusStore.replaceStatuses(in: applyScope, with: latestPulledPayload.currentStatuses)

@@ -1198,34 +1198,52 @@ def normalize_snapshot_payload(
         ) from exc
 
 
+def load_space_for_snapshot_save(session: Session, space_id: str) -> Space:
+    statement = (
+        select(Space)
+        .execution_options(populate_existing=True)
+        .where(Space.space_id == space_id)
+        .options(selectinload(Space.snapshot))
+    )
+    bind = session.get_bind()
+    if bind is not None and bind.dialect.name != "sqlite":
+        statement = statement.with_for_update()
+
+    locked_space = session.scalar(statement)
+    if locked_space is None:
+        raise RuntimeError(f"space disappeared while saving snapshot: {space_id}")
+    return locked_space
+
+
 def save_snapshot(session: Session, space: Space, snapshot_record: SnapshotRecordModel) -> None:
+    locked_space = load_space_for_snapshot_save(session, space.space_id)
     existing_snapshot = (
-        SnapshotRecordModel.model_validate(space.snapshot.payload_json)
-        if space.snapshot is not None
+        SnapshotRecordModel.model_validate(locked_space.snapshot.payload_json)
+        if locked_space.snapshot is not None
         else None
     )
     merged_snapshot = merge_memory_snapshot_state(existing_snapshot, snapshot_record)
     merged_snapshot = merge_weekly_todo_snapshot_state(existing_snapshot, merged_snapshot)
     merged_snapshot = merge_wish_snapshot_state(existing_snapshot, merged_snapshot)
 
-    if space.snapshot is None:
+    if locked_space.snapshot is None:
         session.add(
             SpaceSnapshot(
                 snapshot_id=merged_snapshot.snapshotId,
-                space_id=space.space_id,
+                space_id=locked_space.space_id,
                 payload_json=merged_snapshot.model_dump(mode="json"),
                 updated_by_account_id=merged_snapshot.lastUpdatedByAccountId,
                 updated_at=merged_snapshot.updatedAt,
             )
         )
     else:
-        space.snapshot.snapshot_id = merged_snapshot.snapshotId
-        space.snapshot.payload_json = merged_snapshot.model_dump(mode="json")
-        space.snapshot.updated_by_account_id = merged_snapshot.lastUpdatedByAccountId
-        space.snapshot.updated_at = merged_snapshot.updatedAt
+        locked_space.snapshot.snapshot_id = merged_snapshot.snapshotId
+        locked_space.snapshot.payload_json = merged_snapshot.model_dump(mode="json")
+        locked_space.snapshot.updated_by_account_id = merged_snapshot.lastUpdatedByAccountId
+        locked_space.snapshot.updated_at = merged_snapshot.updatedAt
     logger.info(
         "snapshot persisted space=%s updatedBy=%s memories=%s memory_tombstones=%s wishes=%s wish_tombstones=%s whisperNotes=%s",
-        space.space_id,
+        locked_space.space_id,
         merged_snapshot.lastUpdatedByAccountId,
         len(merged_snapshot.memories),
         len(merged_snapshot.memoryTombstones),
@@ -1234,7 +1252,7 @@ def save_snapshot(session: Session, space: Space, snapshot_record: SnapshotRecor
         len(merged_snapshot.whisperNotes),
     )
     session.commit()
-    session.refresh(space)
+    session.refresh(locked_space)
 
 
 def create_unique_space_id(session: Session) -> str:
