@@ -35,6 +35,7 @@ enum RelationshipConnectionMode: String, Codable {
 
 struct RelationshipUser: Codable, Equatable {
     let userId: String
+    var accountId: String?
     var nickname: String
     var initials: String
 }
@@ -73,6 +74,7 @@ struct CoupleRelationshipState: Codable, Equatable {
         currentAccountId: nil,
         currentUser: RelationshipUser(
             userId: "user-local",
+            accountId: nil,
             nickname: "我",
             initials: "我"
         ),
@@ -220,7 +222,7 @@ enum RelationshipActionError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .backendUnavailable:
-            return "当前暂时连不上测试环境，请确认当前网络可用。"
+            return "当前暂时连不上服务，请确认网络可用后再试。"
         case .unauthorized:
             return "当前账号状态已经失效，请重新登录后再试。"
         case .invalidInviteCode:
@@ -234,7 +236,7 @@ enum RelationshipActionError: LocalizedError, Equatable {
         case .backendRequestFailed(let message):
             return message
         case .responseDecodingFailed:
-            return "后端返回了无法识别的关系结果，请稍后再试。"
+            return "服务返回的关系结果暂时无法识别，请稍后再试。"
         }
     }
 }
@@ -469,6 +471,8 @@ final class RelationshipStore: ObservableObject {
     private let accountSessionStore: AccountSessionStore
     private let storageKey = "com.barry.CoupleSpace.relationshipState"
     private let inviteRecordsStorageKey = "com.barry.CoupleSpace.relationshipInviteRecords"
+    private let legacyNicknameOverrideKeyPrefix = "com.barry.CoupleSpace.nicknameOverride"
+    private let nicknameOverrideKeyPrefix = "com.barry.CoupleSpace.nicknameOverrideV2"
     private let backendClient: RelationshipBackendClient
 
     init(
@@ -479,18 +483,19 @@ final class RelationshipStore: ObservableObject {
         self.accountSessionStore = accountSessionStore
         self.backendClient = RelationshipBackendClient()
 
+        var initialState = CoupleRelationshipState.demoDefault
         if let data = defaults.data(forKey: storageKey) {
             do {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
-                state = try decoder.decode(CoupleRelationshipState.self, from: data)
-                return
+                initialState = try decoder.decode(CoupleRelationshipState.self, from: data)
             } catch {
                 defaults.removeObject(forKey: storageKey)
             }
         }
 
-        state = .demoDefault
+        state = initialState
+        cleanupLegacyNicknameOverrideKeys()
     }
 
     func createSpace(currentNickname: String, partnerNickname: String) async throws {
@@ -506,9 +511,14 @@ final class RelationshipStore: ObservableObject {
 
         state = CoupleRelationshipState(
             currentAccountId: payload.currentAccountId,
-            currentUser: Self.makeUser(id: payload.currentUserId, nickname: currentName),
+            currentUser: Self.makeUser(
+                id: payload.currentUserId,
+                accountId: payload.currentAccountId,
+                nickname: currentName
+            ),
             partner: Self.makeUser(
                 id: payload.partnerUserId ?? "pending-\(payload.inviteCode.lowercased())",
+                accountId: payload.partnerAccountId,
                 nickname: partnerName
             ),
             space: SharedSpaceState(
@@ -544,8 +554,18 @@ final class RelationshipStore: ObservableObject {
 
         state = CoupleRelationshipState(
             currentAccountId: payload.currentAccountId,
-            currentUser: Self.makeUser(id: payload.currentUserId, nickname: currentName),
-            partner: payload.partnerUserId.map { Self.makeUser(id: $0, nickname: partnerName) },
+            currentUser: Self.makeUser(
+                id: payload.currentUserId,
+                accountId: payload.currentAccountId,
+                nickname: currentName
+            ),
+            partner: payload.partnerUserId.map {
+                Self.makeUser(
+                    id: $0,
+                    accountId: payload.partnerAccountId,
+                    nickname: partnerName
+                )
+            },
             space: SharedSpaceState(
                 spaceId: payload.spaceId,
                 title: payload.title,
@@ -587,8 +607,16 @@ final class RelationshipStore: ObservableObject {
 
         state = CoupleRelationshipState(
             currentAccountId: nil,
-            currentUser: Self.makeUser(id: state.currentUser.userId, nickname: currentName),
-            partner: Self.makeUser(id: "pending-\(UUID().uuidString)", nickname: partnerName),
+            currentUser: Self.makeUser(
+                id: state.currentUser.userId,
+                accountId: state.currentUser.accountId,
+                nickname: currentName
+            ),
+            partner: Self.makeUser(
+                id: "pending-\(UUID().uuidString)",
+                accountId: state.partner?.accountId,
+                nickname: partnerName
+            ),
             space: SharedSpaceState(
                 spaceId: spaceId,
                 title: spaceTitle,
@@ -617,8 +645,16 @@ final class RelationshipStore: ObservableObject {
 
         state = CoupleRelationshipState(
             currentAccountId: nil,
-            currentUser: Self.makeUser(id: state.currentUser.userId, nickname: currentName),
-            partner: Self.makeUser(id: inviteRecord.ownerUserId, nickname: partnerName),
+            currentUser: Self.makeUser(
+                id: state.currentUser.userId,
+                accountId: state.currentUser.accountId,
+                nickname: currentName
+            ),
+            partner: Self.makeUser(
+                id: inviteRecord.ownerUserId,
+                accountId: nil,
+                nickname: partnerName
+            ),
             space: SharedSpaceState(
                 spaceId: inviteRecord.spaceId,
                 title: inviteRecord.spaceTitle,
@@ -648,6 +684,7 @@ final class RelationshipStore: ObservableObject {
     func resetDemo() {
         state = .demoDefault
         save()
+        debugLogUserAlignment(context: "resetDemo")
     }
 
     func restoreFromBackup(_ restoredState: CoupleRelationshipState) {
@@ -657,6 +694,195 @@ final class RelationshipStore: ObservableObject {
 
     var contentScope: AppContentScope {
         state.contentScope
+    }
+
+    var currentUserDisplayName: String {
+        resolvedDisplayName(
+            spaceId: activeNicknameOverrideSpaceID,
+            viewerIds: activeNicknameOverrideViewerIDs,
+            targetIds: currentNicknameOverrideTargetIDs,
+            fallback: state.currentUser.nickname
+        )
+    }
+
+    var partnerDisplayNameResolved: String {
+        resolvedDisplayName(
+            spaceId: activeNicknameOverrideSpaceID,
+            viewerIds: activeNicknameOverrideViewerIDs,
+            targetIds: partnerNicknameOverrideTargetIDs,
+            fallback: state.partnerDisplayName
+        )
+    }
+
+    var currentUserDisplayInitials: String {
+        Self.makeInitials(from: currentUserDisplayName, fallback: state.currentUser.initials)
+    }
+
+    var partnerDisplayInitials: String {
+        Self.makeInitials(
+            from: partnerDisplayNameResolved,
+            fallback: state.partner?.initials ?? "+"
+        )
+    }
+
+    var resolvedSpaceDisplayTitle: String {
+        guard state.space != nil else {
+            return state.spaceDisplayTitle
+        }
+
+        switch state.relationStatus {
+        case .unpaired:
+            return state.spaceDisplayTitle
+        case .inviting, .paired:
+            let currentName = Self.normalizedName(currentUserDisplayName, fallback: "我")
+            let partnerName = Self.normalizedName(partnerDisplayNameResolved, fallback: "对方")
+            return "\(currentName) 和 \(partnerName) 的共享空间"
+        }
+    }
+
+    func nicknameOverrideKey(spaceId: String, viewerId: String, targetId: String) -> String {
+        "\(nicknameOverrideKeyPrefix).\(Self.encodedDefaultsKeyComponent(spaceId)).\(Self.encodedDefaultsKeyComponent(viewerId)).\(Self.encodedDefaultsKeyComponent(targetId))"
+    }
+
+    func getNicknameOverride(spaceId: String?, viewerId: String?, targetId: String?) -> String? {
+        guard let key = nicknameOverrideStorageKey(
+            spaceId: spaceId,
+            viewerId: viewerId,
+            targetId: targetId
+        ) else {
+            return nil
+        }
+
+        guard let value = defaults.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              value.isEmpty == false else {
+            return nil
+        }
+        return value
+    }
+
+    func setNicknameOverride(
+        _ nickname: String,
+        spaceId: String?,
+        viewerId: String?,
+        targetId: String?
+    ) {
+        guard let key = nicknameOverrideStorageKey(
+            spaceId: spaceId,
+            viewerId: viewerId,
+            targetId: targetId
+        ) else {
+            return
+        }
+
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(trimmed, forKey: key)
+        }
+
+        objectWillChange.send()
+    }
+
+    func clearNicknameOverride(spaceId: String?, viewerId: String?, targetId: String?) {
+        guard let key = nicknameOverrideStorageKey(
+            spaceId: spaceId,
+            viewerId: viewerId,
+            targetId: targetId
+        ) else {
+            return
+        }
+
+        defaults.removeObject(forKey: key)
+        objectWillChange.send()
+    }
+
+    func setCurrentUserNicknameOverride(_ nickname: String) {
+        let spaceId = activeNicknameOverrideSpaceID
+        let viewerId = activeNicknameOverrideViewerID
+        let targetId = currentNicknameOverrideTargetID
+        setNicknameOverride(
+            nickname,
+            spaceId: spaceId,
+            viewerId: viewerId,
+            targetId: targetId
+        )
+        debugLogOverrideMutation(
+            action: "set",
+            label: "currentUserDisplayName",
+            spaceId: spaceId,
+            viewerIds: [viewerId].compactMap { $0 },
+            targetIds: [targetId].compactMap { $0 },
+            key: nicknameOverrideStorageKey(spaceId: spaceId, viewerId: viewerId, targetId: targetId),
+            fallback: state.currentUser.nickname,
+            finalDisplayName: currentUserDisplayName
+        )
+    }
+
+    func clearCurrentUserNicknameOverride() {
+        let spaceId = activeNicknameOverrideSpaceID
+        let viewerId = activeNicknameOverrideViewerID
+        let targetId = currentNicknameOverrideTargetID
+        clearNicknameOverride(
+            spaceId: spaceId,
+            viewerId: viewerId,
+            targetId: targetId
+        )
+        debugLogOverrideMutation(
+            action: "clear",
+            label: "currentUserDisplayName",
+            spaceId: spaceId,
+            viewerIds: [viewerId].compactMap { $0 },
+            targetIds: [targetId].compactMap { $0 },
+            key: nicknameOverrideStorageKey(spaceId: spaceId, viewerId: viewerId, targetId: targetId),
+            fallback: state.currentUser.nickname,
+            finalDisplayName: currentUserDisplayName
+        )
+    }
+
+    func setPartnerNicknameOverride(_ nickname: String) {
+        let spaceId = activeNicknameOverrideSpaceID
+        let viewerId = activeNicknameOverrideViewerID
+        let targetId = partnerNicknameOverrideTargetID
+        setNicknameOverride(
+            nickname,
+            spaceId: spaceId,
+            viewerId: viewerId,
+            targetId: targetId
+        )
+        debugLogOverrideMutation(
+            action: "set",
+            label: "partnerDisplayNameResolved",
+            spaceId: spaceId,
+            viewerIds: [viewerId].compactMap { $0 },
+            targetIds: [targetId].compactMap { $0 },
+            key: nicknameOverrideStorageKey(spaceId: spaceId, viewerId: viewerId, targetId: targetId),
+            fallback: state.partnerDisplayName,
+            finalDisplayName: partnerDisplayNameResolved
+        )
+    }
+
+    func clearPartnerNicknameOverride() {
+        let spaceId = activeNicknameOverrideSpaceID
+        let viewerId = activeNicknameOverrideViewerID
+        let targetId = partnerNicknameOverrideTargetID
+        clearNicknameOverride(
+            spaceId: spaceId,
+            viewerId: viewerId,
+            targetId: targetId
+        )
+        debugLogOverrideMutation(
+            action: "clear",
+            label: "partnerDisplayNameResolved",
+            spaceId: spaceId,
+            viewerIds: [viewerId].compactMap { $0 },
+            targetIds: [targetId].compactMap { $0 },
+            key: nicknameOverrideStorageKey(spaceId: spaceId, viewerId: viewerId, targetId: targetId),
+            fallback: state.partnerDisplayName,
+            finalDisplayName: partnerDisplayNameResolved
+        )
     }
 
     private func save() {
@@ -719,12 +945,47 @@ final class RelationshipStore: ObservableObject {
         return trimmed.isEmpty ? fallback : trimmed
     }
 
-    private static func makeUser(id: String, nickname: String) -> RelationshipUser {
+    private static func makeUser(id: String, accountId: String? = nil, nickname: String) -> RelationshipUser {
         RelationshipUser(
             userId: id,
+            accountId: Self.normalizedIdentifier(accountId),
             nickname: nickname,
             initials: String(nickname.prefix(1)).uppercased()
         )
+    }
+
+    private var activeNicknameOverrideSpaceID: String? {
+        Self.normalizedIdentifier(state.space?.spaceId)
+    }
+
+    private func resolvedDisplayName(
+        spaceId: String?,
+        viewerIds: [String],
+        targetIds: [String],
+        fallback: String
+    ) -> String {
+        for viewerId in viewerIds {
+            for targetId in targetIds {
+                if let override = getNicknameOverride(
+                    spaceId: spaceId,
+                    viewerId: viewerId,
+                    targetId: targetId
+                ) {
+                    return override
+                }
+            }
+        }
+
+        return fallback
+    }
+
+    private static func makeInitials(from nickname: String, fallback: String) -> String {
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let firstCharacter = trimmed.first else {
+            return fallback
+        }
+
+        return String(firstCharacter).uppercased()
     }
 
     func adoptAuthenticatedRelationship(activeSpaceID: String?) async {
@@ -735,31 +996,47 @@ final class RelationshipStore: ObservableObject {
             account.nickname,
             fallback: state.currentUser.nickname
         )
-        let normalizedActiveSpaceID = activeSpaceID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedActiveSpaceID = Self.normalizedIdentifier(activeSpaceID)
 
-        if let normalizedActiveSpaceID, normalizedActiveSpaceID.isEmpty == false {
+        if let normalizedActiveSpaceID {
+            let isSameSpace = Self.normalizedIdentifier(state.space?.spaceId) == normalizedActiveSpaceID
+            let alignedUsers = isSameSpace
+                ? alignedUsersForAuthenticatedAccount(
+                    accountId: account.accountId,
+                    currentNickname: currentNickname
+                )
+                : (
+                    currentUser: Self.makeUser(
+                        id: account.accountId,
+                        accountId: account.accountId,
+                        nickname: currentNickname
+                    ),
+                    partner: Optional<RelationshipUser>.none
+                )
+
             state = CoupleRelationshipState(
                 currentAccountId: account.accountId,
-                currentUser: Self.makeUser(
-                    id: state.currentUser.userId,
-                    nickname: currentNickname
-                ),
-                partner: state.partner,
+                currentUser: alignedUsers.currentUser,
+                partner: alignedUsers.partner,
                 space: SharedSpaceState(
                     spaceId: normalizedActiveSpaceID,
-                    title: state.space?.title ?? "双人共享空间",
-                    inviteCode: state.space?.inviteCode ?? "",
+                    title: isSameSpace ? (state.space?.title ?? "双人共享空间") : "双人共享空间",
+                    inviteCode: isSameSpace ? (state.space?.inviteCode ?? "") : "",
                     isActivated: true,
-                    createdAt: state.space?.createdAt ?? state.pairedAt ?? Date()
+                    createdAt: isSameSpace
+                        ? (state.space?.createdAt ?? state.pairedAt ?? Date())
+                        : Date()
                 ),
                 relationStatus: .paired,
                 connectionMode: .backendRemote,
-                inviteCode: state.inviteCode,
-                invitedAt: state.invitedAt,
-                pairedAt: state.pairedAt ?? Date()
+                inviteCode: isSameSpace ? state.inviteCode : nil,
+                invitedAt: isSameSpace ? state.invitedAt : nil,
+                pairedAt: isSameSpace ? (state.pairedAt ?? Date()) : Date()
             )
             save()
+            debugLogUserAlignment(
+                context: "adoptAuthenticatedRelationship(activeSpaceID: \(normalizedActiveSpaceID), isSameSpace: \(isSameSpace))"
+            )
             await refreshRemoteRelationshipStatusIfNeeded()
             return
         }
@@ -768,6 +1045,7 @@ final class RelationshipStore: ObservableObject {
             currentAccountId: account.accountId,
             currentUser: Self.makeUser(
                 id: AppDataDefaults.localUserId,
+                accountId: account.accountId,
                 nickname: currentNickname
             ),
             partner: nil,
@@ -779,6 +1057,9 @@ final class RelationshipStore: ObservableObject {
             pairedAt: nil
         )
         save()
+        debugLogUserAlignment(
+            context: "adoptAuthenticatedRelationship(activeSpaceID: nil)"
+        )
     }
 
     private func ensureAuthenticatedSession() throws -> AccountSessionState {
@@ -837,11 +1118,13 @@ final class RelationshipStore: ObservableObject {
             hasChanges = true
         }
 
-        if nextState.currentUser.userId != payload.currentUserId {
-            nextState.currentUser = Self.makeUser(
-                id: payload.currentUserId,
-                nickname: nextState.currentUser.nickname
-            )
+        let refreshedCurrentUser = Self.makeUser(
+            id: payload.currentUserId,
+            accountId: payload.currentAccountId,
+            nickname: nextState.currentUser.nickname
+        )
+        if nextState.currentUser != refreshedCurrentUser {
+            nextState.currentUser = refreshedCurrentUser
             hasChanges = true
         }
 
@@ -876,6 +1159,7 @@ final class RelationshipStore: ObservableObject {
             )
             let refreshedPartner = Self.makeUser(
                 id: partnerUserId,
+                accountId: payload.partnerAccountId,
                 nickname: normalizedPartnerNickname
             )
 
@@ -883,6 +1167,9 @@ final class RelationshipStore: ObservableObject {
                 nextState.partner = refreshedPartner
                 hasChanges = true
             }
+        } else if refreshedStatus != .inviting, nextState.partner != nil {
+            nextState.partner = nil
+            hasChanges = true
         }
 
         if refreshedStatus == .paired {
@@ -896,5 +1183,210 @@ final class RelationshipStore: ObservableObject {
         guard hasChanges else { return }
         state = nextState
         save()
+        debugLogUserAlignment(context: "applyRefreshedRelationshipStatus")
+    }
+
+    private func nicknameOverrideStorageKey(
+        spaceId: String?,
+        viewerId: String?,
+        targetId: String?
+    ) -> String? {
+        guard let normalizedSpaceID = Self.normalizedIdentifier(spaceId),
+              let normalizedViewerID = Self.normalizedIdentifier(viewerId),
+              let normalizedTargetID = Self.normalizedIdentifier(targetId) else {
+            return nil
+        }
+
+        return nicknameOverrideKey(
+            spaceId: normalizedSpaceID,
+            viewerId: normalizedViewerID,
+            targetId: normalizedTargetID
+        )
+    }
+
+    private var activeNicknameOverrideViewerID: String? {
+        activeNicknameOverrideViewerIDs.first
+    }
+
+    private var activeNicknameOverrideViewerIDs: [String] {
+        if state.connectionMode == .backendRemote {
+            return authenticatedViewerIdentifiers
+        }
+
+        return uniqueIdentifiers([
+            stableIdentifier(for: state.currentUser),
+            Self.normalizedIdentifier(state.currentUser.accountId)
+        ])
+    }
+
+    private var currentNicknameOverrideTargetID: String? {
+        currentNicknameOverrideTargetIDs.first
+    }
+
+    private var currentNicknameOverrideTargetIDs: [String] {
+        uniqueIdentifiers(
+            authenticatedViewerIdentifiers
+            + [
+                stableIdentifier(for: state.currentUser),
+                Self.normalizedIdentifier(state.currentUser.accountId)
+            ]
+        )
+    }
+
+    private var partnerNicknameOverrideTargetID: String? {
+        partnerNicknameOverrideTargetIDs.first
+    }
+
+    private var partnerNicknameOverrideTargetIDs: [String] {
+        uniqueIdentifiers([
+            stableIdentifier(for: state.partner),
+            Self.normalizedIdentifier(state.partner?.accountId)
+        ])
+    }
+
+    private var authenticatedViewerIdentifiers: [String] {
+        let sessionAccountID = Self.normalizedIdentifier(
+            accountSessionStore.state.account?.accountId ?? state.currentAccountId
+        )
+        let currentUserAccountID = Self.normalizedIdentifier(
+            state.currentUser.accountId ?? state.currentAccountId
+        )
+
+        if let sessionAccountID,
+           let currentUserAccountID,
+           sessionAccountID == currentUserAccountID,
+           let currentUserID = Self.normalizedIdentifier(state.currentUser.userId) {
+            return uniqueIdentifiers([currentUserID, sessionAccountID])
+        }
+
+        return uniqueIdentifiers([
+            sessionAccountID,
+            stableIdentifier(for: state.currentUser),
+            Self.normalizedIdentifier(state.currentUser.accountId)
+        ])
+    }
+
+    private func stableIdentifier(for user: RelationshipUser?) -> String? {
+        if let userID = Self.normalizedIdentifier(user?.userId) {
+            return userID
+        }
+
+        return Self.normalizedIdentifier(user?.accountId)
+    }
+
+    private func alignedUsersForAuthenticatedAccount(
+        accountId: String,
+        currentNickname: String
+    ) -> (currentUser: RelationshipUser, partner: RelationshipUser?) {
+        let normalizedCurrentAccountID = Self.normalizedIdentifier(state.currentUser.accountId)
+            ?? Self.normalizedIdentifier(state.currentAccountId)
+        let normalizedPartnerAccountID = Self.normalizedIdentifier(state.partner?.accountId)
+        let shouldFlipRoles = (
+            normalizedPartnerAccountID == accountId
+        ) || (
+            normalizedPartnerAccountID == nil
+            && normalizedCurrentAccountID != nil
+            && normalizedCurrentAccountID != accountId
+            && state.partner != nil
+        )
+
+        if shouldFlipRoles, let previousPartner = state.partner {
+            let nextCurrentUser = Self.makeUser(
+                id: previousPartner.userId,
+                accountId: accountId,
+                nickname: currentNickname
+            )
+            let nextPartner = Self.makeUser(
+                id: state.currentUser.userId,
+                accountId: normalizedCurrentAccountID,
+                nickname: state.currentUser.nickname
+            )
+            return (nextCurrentUser, nextPartner)
+        }
+
+        let nextCurrentUser = Self.makeUser(
+            id: normalizedCurrentAccountID == accountId ? state.currentUser.userId : accountId,
+            accountId: accountId,
+            nickname: currentNickname
+        )
+        return (nextCurrentUser, state.partner)
+    }
+
+    private func cleanupLegacyNicknameOverrideKeys() {
+        let legacyPrefix = legacyNicknameOverrideKeyPrefix + "."
+        defaults.dictionaryRepresentation().keys
+            .filter { $0.hasPrefix(legacyPrefix) }
+            .forEach { defaults.removeObject(forKey: $0) }
+    }
+
+    private static func normalizedIdentifier(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func encodedDefaultsKeyComponent(_ value: String) -> String {
+        Data(value.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func uniqueIdentifiers(_ values: [String?]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            guard let value = Self.normalizedIdentifier(value),
+                  seen.insert(value).inserted else {
+                return nil
+            }
+            return value
+        }
+    }
+
+    private func debugLogOverrideMutation(
+        action: String,
+        label: String,
+        spaceId: String?,
+        viewerIds: [String],
+        targetIds: [String],
+        key: String?,
+        fallback: String,
+        finalDisplayName: String
+    ) {
+#if DEBUG
+        print(
+            "[RelationshipStore][override] action=\(action) label=\(label) activeSpaceId=\(spaceId ?? "nil") viewerIds=\(viewerIds) targetIds=\(targetIds) key=\(maskedStorageKey(key)) fallback=\(fallback) final=\(finalDisplayName)"
+        )
+#endif
+    }
+
+    private func debugLogUserAlignment(context: String) {
+#if DEBUG
+        let current = "current(userId=\(state.currentUser.userId), accountId=\(state.currentUser.accountId ?? "nil"))"
+        let partner = "partner(userId=\(state.partner?.userId ?? "nil"), accountId=\(state.partner?.accountId ?? "nil"))"
+        let sessionAccountId = accountSessionStore.state.account?.accountId ?? "nil"
+        print(
+            "[RelationshipStore][alignment] context=\(context) activeSpaceId=\(state.space?.spaceId ?? "nil") stateCurrentAccountId=\(state.currentAccountId ?? "nil") sessionAccountId=\(sessionAccountId) \(current) \(partner)"
+        )
+#endif
+    }
+
+    private func maskedStorageKey(_ key: String?) -> String {
+#if DEBUG
+        guard let key else { return "nil" }
+        let prefixLength = min(12, key.count)
+        let suffixLength = min(8, max(0, key.count - prefixLength))
+        let prefix = String(key.prefix(prefixLength))
+        let suffix = suffixLength > 0 ? String(key.suffix(suffixLength)) : ""
+        if key.count <= prefixLength + suffixLength {
+            return key
+        }
+        return "\(prefix)...\(suffix)"
+#else
+        return key ?? "nil"
+#endif
     }
 }

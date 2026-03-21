@@ -3,16 +3,21 @@ import UIKit
 
 struct SpaceSettingsView: View {
     @EnvironmentObject private var relationshipStore: RelationshipStore
+    @EnvironmentObject private var accountSessionStore: AccountSessionStore
 
     let initialAction: SpaceSettingsEntryAction?
+    let onRequireLogin: ((SpaceSettingsEntryAction) -> Void)?
 
     @State private var activeSheet: SpaceSettingsEntryAction?
-    @State private var copiedInviteCode = false
-    @State private var isPresentingResetRelationshipAlert = false
-    @State private var hasPresentedInitialAction = false
+    @State private var lastAutoPresentedAction: SpaceSettingsEntryAction?
+    @State private var isPresentingNicknameEditor = false
 
-    init(initialAction: SpaceSettingsEntryAction? = nil) {
+    init(
+        initialAction: SpaceSettingsEntryAction? = nil,
+        onRequireLogin: ((SpaceSettingsEntryAction) -> Void)? = nil
+    ) {
         self.initialAction = initialAction
+        self.onRequireLogin = onRequireLogin
     }
 
     var body: some View {
@@ -28,66 +33,51 @@ struct SpaceSettingsView: View {
                 VStack(alignment: .leading, spacing: AppTheme.Spacing.pageBlock) {
                     AppSectionCard(
                         title: "共享关系",
-                        subtitle: "先把你们属于同一个空间这件事安静地确定下来，后面的记录和计划才会真正有归属。",
+                        subtitle: "创建或加入同一个共享空间。",
                         symbol: "person.2.fill"
                     ) {
                         VStack(spacing: 14) {
                             relationshipStatusCard
 
                             relationshipActions
-
-                            if relationshipStore.state.relationStatus != .unpaired {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Button {
-                                        isPresentingResetRelationshipAlert = true
-                                    } label: {
-                                        PageActionPill(text: "重新设置关系", systemImage: "arrow.clockwise")
-                                    }
-                                    .buttonStyle(.plain)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                                    Text("退出后会先回到本地空间。当前共享空间里的内容不会立刻显示在眼前，但这不是直接删除所有内容。")
-                                        .font(.caption)
-                                        .foregroundStyle(AppTheme.Colors.subtitle)
-                                        .lineSpacing(3)
-                                }
-                            }
                         }
                     }
 
                     AppSectionCard(
                         title: "空间显示",
-                        subtitle: "先把空间的节奏调到更适合你们现在的生活",
+                        subtitle: "首页展示和提醒节奏。",
                         symbol: "rectangle.on.rectangle"
                     ) {
                         VStack(spacing: 14) {
                             settingsLine(
                                 title: "首页展示",
-                                subtitle: "让关系概览、生活和记忆入口更贴近你们现在的节奏。"
+                                subtitle: "关系概览和主要入口的展示方式。"
                             )
 
                             settingsLine(
                                 title: "提醒节奏",
-                                subtitle: "纪念日和生活提醒可以更安静一点，不打扰，但别错过。"
+                                subtitle: "纪念日和日常提醒。"
                             )
                         }
                     }
 
                     AppSectionCard(
-                        title: "空间氛围",
-                        subtitle: "保持现在的留白感，也为以后留一些调整空间",
+                        title: "空间资料",
+                        subtitle: "空间风格和双人资料。",
                         symbol: "sparkles"
                     ) {
                         VStack(spacing: 14) {
                             settingsLine(
-                                title: "卡片风格",
-                                subtitle: "保留现在的轻层次和柔和色彩，后续可以扩展更多主题。"
+                                title: "页面风格",
+                                subtitle: "当前空间的页面风格。"
                             )
 
-                            settingsLine(
+                            settingsNavigationLine(
                                 title: "双人资料",
-                                subtitle: "名字、城市和空间信息都可以在这里慢慢调整。"
-                            )
+                                subtitle: nicknameEditorSubtitle
+                            ) {
+                                isPresentingNicknameEditor = true
+                            }
                         }
                     }
                 }
@@ -96,19 +86,6 @@ struct SpaceSettingsView: View {
         }
         .navigationTitle("空间设置")
         .secondaryPageNavigationStyle()
-        .alert(
-            "重新设置关系？",
-            isPresented: $isPresentingResetRelationshipAlert
-        ) {
-            Button("重新设置", role: .destructive) {
-                copiedInviteCode = false
-                relationshipStore.resetDemo()
-            }
-
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("这会退出当前共享空间，并先切回本地空间查看内容。当前共享空间里的记录、愿望和纪念日不会立刻显示在眼前，但这不是直接删除所有内容。")
-        }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .create:
@@ -116,7 +93,6 @@ struct SpaceSettingsView: View {
                     currentNickname: relationshipStore.state.currentUser.nickname,
                     partnerNickname: relationshipStore.state.partner?.nickname ?? ""
                 ) { currentNickname, partnerNickname in
-                    copiedInviteCode = false
                     try await relationshipStore.createSpace(
                         currentNickname: currentNickname,
                         partnerNickname: partnerNickname
@@ -128,7 +104,6 @@ struct SpaceSettingsView: View {
                     partnerNickname: relationshipStore.state.partner?.nickname ?? "",
                     inviteCode: relationshipStore.state.inviteCode ?? ""
                 ) { currentNickname, partnerNickname, inviteCode in
-                    copiedInviteCode = false
                     try await relationshipStore.joinSpace(
                         currentNickname: currentNickname,
                         partnerNickname: partnerNickname,
@@ -137,15 +112,20 @@ struct SpaceSettingsView: View {
                 }
             }
         }
+        .sheet(isPresented: $isPresentingNicknameEditor) {
+            PartnerNicknameEditorSheet()
+        }
         .onAppear {
             Task {
                 await relationshipStore.refreshRemoteRelationshipStatusIfNeeded()
             }
-            guard !hasPresentedInitialAction else { return }
-            guard relationshipStore.state.relationStatus == .unpaired else { return }
-            guard let initialAction else { return }
-            activeSheet = initialAction
-            hasPresentedInitialAction = true
+            presentInitialActionIfNeeded()
+        }
+        .onChange(of: initialAction) { _, _ in
+            presentInitialActionIfNeeded()
+        }
+        .onChange(of: relationshipStore.state.relationStatus) { _, _ in
+            presentInitialActionIfNeeded()
         }
     }
 
@@ -182,15 +162,15 @@ struct SpaceSettingsView: View {
 
             HStack(spacing: 12) {
                 personUnit(
-                    nickname: relationshipStore.state.currentUser.nickname,
-                    initials: relationshipStore.state.currentUser.initials,
+                    nickname: relationshipStore.currentUserDisplayName,
+                    initials: relationshipStore.currentUserDisplayInitials,
                     title: "当前用户",
                     isDimmed: false
                 )
 
                 personUnit(
-                    nickname: relationshipStore.state.partnerDisplayName,
-                    initials: relationshipStore.state.partner?.initials ?? "+",
+                    nickname: relationshipStore.partnerDisplayNameResolved,
+                    initials: relationshipStore.partnerDisplayInitials,
                     title: relationshipStore.state.isBound ? "伴侣" : "等待加入",
                     isDimmed: !relationshipStore.state.isBound
                 )
@@ -198,18 +178,14 @@ struct SpaceSettingsView: View {
 
             if let space = relationshipStore.state.space {
                 HStack(spacing: 8) {
-                    detailPill(text: space.title, systemImage: "sparkles")
+                    detailPill(text: relationshipStore.resolvedSpaceDisplayTitle, systemImage: "sparkles")
                     detailPill(
-                        text: space.isActivated ? "空间已激活" : "等待对方",
+                        text: space.isActivated ? "已绑定" : "等待对方",
                         systemImage: space.isActivated ? "checkmark.circle.fill" : "clock"
                     )
                 }
             }
 
-            Text(AccountSyncCopy.localStorageSummary)
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.subtitle)
-                .lineSpacing(3)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -225,38 +201,27 @@ struct SpaceSettingsView: View {
             case .unpaired:
                 HStack(spacing: 10) {
                     Button {
-                        activeSheet = .create
+                        openRelationshipEntry(.create)
                     } label: {
                         PageCTAButton(text: "创建共享空间", systemImage: "heart")
                     }
                     .buttonStyle(.plain)
 
                     Button {
-                        activeSheet = .join
+                        openRelationshipEntry(.join)
                     } label: {
                         PageActionPill(text: "输入邀请码加入", systemImage: "number")
                     }
                     .buttonStyle(.plain)
                 }
 
-                Text("如果你先创建空间，就把邀请码发给对方；如果对方已经建好了，也可以直接输入邀请码加入。")
+                Text("你创建空间后把邀请码发给对方；如果已经拿到邀请码，直接输入加入。")
                     .font(.footnote)
                     .foregroundStyle(AppTheme.Colors.subtitle)
                     .lineSpacing(3)
 
             case .inviting:
                 HStack(spacing: 10) {
-                    Button {
-                        UIPasteboard.general.string = relationshipStore.state.inviteCode
-                        copiedInviteCode = true
-                    } label: {
-                        PageActionPill(
-                            text: copiedInviteCode ? "邀请码已复制" : "复制邀请码",
-                            systemImage: "doc.on.doc"
-                        )
-                    }
-                    .buttonStyle(.plain)
-
                     if relationshipStore.state.connectionMode == .localDemo {
                         Button {
                             relationshipStore.completeInvitation()
@@ -269,8 +234,8 @@ struct SpaceSettingsView: View {
 
                 Text(
                     relationshipStore.state.isUsingBackendConnection
-                    ? "现在可以把邀请码发给对方。只有对方在另一端输入这枚真实邀请码后，这个空间才会正式切到双人共享状态。"
-                    : "现在可以把邀请码发给对方；如果只是想先把空间设置继续走完，也可以直接完成这一步。以后开启账号后，这段关系也会继续接到云端。"
+                    ? "把邀请码发给对方，对方输入后就会完成绑定。"
+                    : "现在可以把邀请码发给对方，也可以先完成这一步。"
                 )
                     .font(.footnote)
                     .foregroundStyle(AppTheme.Colors.subtitle)
@@ -280,22 +245,40 @@ struct SpaceSettingsView: View {
                 HStack(spacing: 10) {
                     Button {
                         UIPasteboard.general.string = relationshipStore.state.space?.inviteCode
-                        copiedInviteCode = true
                     } label: {
                         PageActionPill(
-                            text: copiedInviteCode ? "邀请码已复制" : "查看邀请码",
+                            text: "查看邀请码",
                             systemImage: "doc.on.doc"
                         )
                     }
                     .buttonStyle(.plain)
                 }
 
-                Text("现在已经处于双人共享空间状态。以后开启账号后，“我的”页里的账号与同步会继续承接换机恢复、云端空间和双方同步。")
+                Text("当前已经处于双人共享空间状态。")
                     .font(.footnote)
                     .foregroundStyle(AppTheme.Colors.subtitle)
                     .lineSpacing(3)
             }
         }
+    }
+
+    private func openRelationshipEntry(_ action: SpaceSettingsEntryAction) {
+        guard accountSessionStore.state.isLoggedIn else {
+            onRequireLogin?(action)
+            return
+        }
+
+        activeSheet = action
+    }
+
+    private func presentInitialActionIfNeeded() {
+        guard relationshipStore.state.relationStatus == .unpaired else { return }
+        guard activeSheet == nil else { return }
+        guard let initialAction else { return }
+        guard lastAutoPresentedAction != initialAction else { return }
+
+        activeSheet = initialAction
+        lastAutoPresentedAction = initialAction
     }
 
     private var statusHeadline: String {
@@ -312,12 +295,16 @@ struct SpaceSettingsView: View {
     private var statusBody: String {
         switch relationshipStore.state.relationStatus {
         case .unpaired:
-            return "从这里创建共享空间，或者输入已经拿到的邀请码加入。连上后端后，空间信息和关系状态会直接按真实结果承接回来。"
+            return "从这里创建共享空间，或者输入邀请码加入。"
         case .inviting:
-            return "当前邀请码是 \(relationshipStore.state.inviteCode ?? "--")。等 \(relationshipStore.state.partnerDisplayName) 加入之后，这个空间会从邀请中切换到已绑定。"
+            return "当前邀请码是 \(relationshipStore.state.inviteCode ?? "--")。等 \(relationshipStore.partnerDisplayNameResolved) 加入后，这里会更新为已绑定。"
         case .paired:
-            return "当前已与 \(relationshipStore.state.partnerDisplayName) 绑定，空间状态已激活。这个结果会保存在本地，重新打开 App 之后仍然会保留；以后账号能力开启后，也会继续支持换机恢复和双端同步。"
+            return "当前已与 \(relationshipStore.partnerDisplayNameResolved) 绑定，你们已经进入同一个共享空间。"
         }
+    }
+
+    private var nicknameEditorSubtitle: String {
+        "本机备注名：\(relationshipStore.currentUserDisplayName) / \(relationshipStore.partnerDisplayNameResolved)"
     }
 
     private func personUnit(
@@ -395,6 +382,40 @@ struct SpaceSettingsView: View {
             AppTheme.Colors.cardSurface(.secondary),
             cornerRadius: AppTheme.CornerRadius.medium
         )
+    }
+
+    private func settingsNavigationLine(
+        title: String,
+        subtitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.Colors.title)
+
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.Colors.subtitle)
+                        .lineSpacing(3)
+                }
+
+                Spacer(minLength: 12)
+
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(AppTheme.Colors.subtitle.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .appCardSurface(
+                AppTheme.Colors.cardSurface(.secondary),
+                cornerRadius: AppTheme.CornerRadius.medium
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -523,7 +544,7 @@ private struct JoinRelationshipSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("如果对方已经先创建好了空间，就把邀请码填进来。只有邀请码真实有效时，当前关系和共享空间状态才会继续切到同一个后端空间。")
+                    Text("如果对方已经先创建好了空间，就把邀请码填进来。只有邀请码真实有效时，当前关系和共享空间状态才会切到和对方一致的同一个共享空间。")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.Colors.subtitle)
                         .lineSpacing(3)
