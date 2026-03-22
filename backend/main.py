@@ -6,8 +6,10 @@ import json
 import logging
 import re
 import secrets
+import smtplib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -575,11 +577,23 @@ def generate_email_otp_code() -> str:
 
 
 def send_email_otp(email: str, code: str) -> None:
-    # 最小可用闭环：开发环境先写日志；后续再接真实 SMTP。
-    if settings.email_otp_log_plaintext_code:
+    if not settings.smtp_user or not settings.smtp_password:
+        # 没有配置 SMTP 时降级到日志
         logger.info("email otp delivered email=%s code=%s", email, code)
-    else:
-        logger.info("email otp delivered email=%s", email)
+        return
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = "【余白】您的验证码"
+        msg["From"] = settings.smtp_from
+        msg["To"] = email
+        msg.set_content(f"您好！\n\n您的验证码是：{code}\n\n有效期 10 分钟，请勿泄露。\n\n—— 余白")
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+            server.starttls()
+            server.login(settings.smtp_user, settings.smtp_password)
+            server.send_message(msg)
+        logger.info("email otp sent to %s", email)
+    except Exception:
+        logger.exception("failed to send email otp to %s", email)
 
 
 def create_unique_account_id(session: Session) -> str:

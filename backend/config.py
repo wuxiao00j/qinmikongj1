@@ -33,5 +33,11 @@ class Settings:
     )
     memory_asset_max_bytes: int = int(os.getenv("MEMORY_ASSET_MAX_BYTES", "12582912"))
 
+    smtp_host: str = os.getenv("SMTP_HOST", "smtp.qq.com")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user: str = os.getenv("SMTP_USER", "")
+    smtp_password: str = os.getenv("SMTP_PASSWORD", "")  # QQ 邮箱授权码
+    smtp_from: str = os.getenv("SMTP_FROM", "余白 <noreply@yuba.space>")
+
 
 settings = Settings()
