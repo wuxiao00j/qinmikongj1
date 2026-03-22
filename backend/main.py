@@ -57,7 +57,7 @@ async def privacy_policy():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>隐私政策 - 余白</title>
+<title>隐私政策 - MARGIN</title>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.8; color: #333; }
 h1 { color: #1a1a1a; border-bottom: 1px solid #eee; padding-bottom: 12px; }
@@ -71,7 +71,7 @@ p { margin: 12px 0; }
 <p class="updated">最后更新：2026年3月22日</p>
 
 <h2>一、信息收集与存储</h2>
-<p>余白（CoupleSpace）是一款面向情侣关系的双人空间应用。当前版本会保存您在应用内主动创建的内容，包括纪念日、生活事项、愿望清单、记忆记录、状态表达和小纸条等。</p>
+<p>MARGIN（CoupleSpace）是一款面向情侣关系的双人空间应用。当前版本会保存您在应用内主动创建的内容，包括纪念日、生活事项、愿望清单、记忆记录、状态表达和小纸条等。</p>
 <p>这些内容优先以本地数据形式存储在您的设备上。当您登录账号并创建或加入共享空间后，部分内容会进入双人共享作用域。</p>
 
 <h2>二、信息共享</h2>
