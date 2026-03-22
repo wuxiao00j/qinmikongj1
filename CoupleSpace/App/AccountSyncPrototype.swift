@@ -173,7 +173,7 @@ enum AccountSessionSource: String, Codable {
         case .demo:
             return "当前仍以本机保存为主，内容会先留在这台设备里。"
         case .authenticated:
-            return "这里已经接入一份可用账号，会继续沿着这条状态线展示云端连接和同步结果。"
+            return "这里已经登录一份可用账号，后续会继续展示云端连接和同步结果。"
         }
     }
 }
@@ -348,14 +348,18 @@ struct LocalBackendConnectionConfiguration {
     let baseURL: URL?
     let loginPath: String
     let demoLoginPath: String
+    let emailRequestCodePath: String
+    let emailVerifyCodePath: String
     let snapshotPathTemplate: String
     let defaultDemoAccountID: String
 
     static let current = LocalBackendConnectionConfiguration(
         environmentLabel: "公网测试环境",
-        baseURL: URL(string: "http://49.51.194.94:8787"),
+        baseURL: URL(string: "http://175.27.247.152:8787"),
         loginPath: "/auth/login",
         demoLoginPath: "/auth/demo-login",
+        emailRequestCodePath: "/auth/email/request-code",
+        emailVerifyCodePath: "/auth/email/verify-code",
         snapshotPathTemplate: "/spaces/{spaceId}/snapshot",
         defaultDemoAccountID: "acct-real-alex"
     )
@@ -368,6 +372,16 @@ struct LocalBackendConnectionConfiguration {
     var demoLoginURL: URL? {
         guard let baseURL else { return nil }
         return baseURL.appending(path: demoLoginPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+    }
+
+    var emailRequestCodeURL: URL? {
+        guard let baseURL else { return nil }
+        return baseURL.appending(path: emailRequestCodePath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+    }
+
+    var emailVerifyCodeURL: URL? {
+        guard let baseURL else { return nil }
+        return baseURL.appending(path: emailVerifyCodePath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
     var baseURLDisplayText: String {
@@ -808,22 +822,61 @@ enum LocalBackendAccountLoginError: LocalizedError {
         case .baseURLMissing:
             return "登录服务地址还没有配置。"
         case .requestEncodingFailed:
-            return "这次没有成功整理登录请求。"
+            return "这次没有成功发起登录，请稍后再试。"
         case .invalidCredentials:
             return "邮箱或密码不正确。"
         case .backendUnavailable:
-            return "当前暂时连不上测试环境，请确认网络可用后再试。"
+            return "当前暂时连不上登录服务，请确认网络可用后再试。"
         case .requestFailed(let detail):
             return "登录请求失败：\(detail)"
         case .invalidResponse:
-            return "登录服务返回了无法识别的响应。"
+            return "登录服务返回了无法识别的信息。"
         case .unexpectedStatusCode(let statusCode, let responseBody):
             let suffix = responseBody?.isEmpty == false ? "（\(responseBody!)）" : ""
-            return "登录接口返回了异常状态码 \(statusCode)\(suffix)"
+            return "登录服务暂时出了点问题（\(statusCode)）\(suffix)"
         case .responseDecodingFailed(let detail):
-            return "登录返回解码失败：\(detail)"
+            return "登录结果暂时无法识别：\(detail)"
         case .requiredFieldMissing(let field):
-            return "登录返回缺少关键字段：\(field)"
+            return "登录结果缺少必要信息：\(field)"
+        }
+    }
+}
+
+enum LocalBackendEmailOTPError: LocalizedError {
+    case baseURLMissing
+    case requestEncodingFailed
+    case invalidEmail
+    case invalidCode
+    case backendUnavailable
+    case requestFailed(detail: String)
+    case invalidResponse
+    case unexpectedStatusCode(Int, responseBody: String?)
+    case responseDecodingFailed(detail: String)
+    case requiredFieldMissing(field: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .baseURLMissing:
+            return "登录服务地址还没有配置。"
+        case .requestEncodingFailed:
+            return "这次没有成功发起请求，请稍后再试。"
+        case .invalidEmail:
+            return "请先输入正确的邮箱。"
+        case .invalidCode:
+            return "验证码不正确或已过期，请重新获取。"
+        case .backendUnavailable:
+            return "当前暂时连不上登录服务，请确认网络可用后再试。"
+        case .requestFailed(let detail):
+            return "请求失败：\(detail)"
+        case .invalidResponse:
+            return "登录服务返回了无法识别的信息。"
+        case .unexpectedStatusCode(let statusCode, let responseBody):
+            let suffix = responseBody?.isEmpty == false ? "（\(responseBody!)）" : ""
+            return "登录服务暂时出了点问题（\(statusCode)）\(suffix)"
+        case .responseDecodingFailed(let detail):
+            return "返回结果暂时无法识别：\(detail)"
+        case .requiredFieldMissing(let field):
+            return "返回结果缺少必要信息：\(field)"
         }
     }
 }
@@ -831,6 +884,21 @@ enum LocalBackendAccountLoginError: LocalizedError {
 private struct LocalBackendLoginRequestBody: Encodable {
     let email: String
     let password: String
+}
+
+private struct LocalBackendEmailOTPRequestCodeBody: Encodable {
+    let email: String
+}
+
+private struct LocalBackendEmailOTPVerifyCodeBody: Encodable {
+    let email: String
+    let code: String
+    let displayName: String?
+}
+
+private struct LocalBackendEmailOTPRequestCodeResponsePayload: Decodable {
+    let ok: Bool?
+    let cooldownSeconds: Int?
 }
 
 struct LocalBackendAccountLoginClient {
@@ -935,6 +1003,201 @@ struct LocalBackendAccountLoginClient {
             throw loginError
         } catch {
             throw LocalBackendAccountLoginError.responseDecodingFailed(detail: error.localizedDescription)
+        }
+    }
+
+    private func responseBodyPreview(from data: Data) -> String? {
+        guard let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              text.isEmpty == false else {
+            return nil
+        }
+
+        return String(text.prefix(160))
+    }
+}
+
+struct LocalBackendEmailOTPClient {
+    let configuration: LocalBackendConnectionConfiguration
+    let session: URLSession
+
+    init(
+        configuration: LocalBackendConnectionConfiguration = .current,
+        session: URLSession = .shared
+    ) {
+        self.configuration = configuration
+        self.session = session
+    }
+
+    func requestCode(email: String) async throws -> Int {
+        guard let url = configuration.emailRequestCodeURL else {
+            throw LocalBackendEmailOTPError.baseURLMissing
+        }
+
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedEmail.isEmpty == false else {
+            throw LocalBackendEmailOTPError.invalidEmail
+        }
+
+        let requestBody: Data
+        do {
+            requestBody = try JSONEncoder().encode(LocalBackendEmailOTPRequestCodeBody(email: normalizedEmail))
+        } catch {
+            throw LocalBackendEmailOTPError.requestEncodingFailed
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = requestBody
+
+        let responseData: Data
+        let response: URLResponse
+
+        do {
+            (responseData, response) = try await session.data(for: request)
+        } catch let urlError as URLError {
+            switch urlError.code {
+            case .cannotConnectToHost, .timedOut, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet:
+                throw LocalBackendEmailOTPError.backendUnavailable
+            default:
+                throw LocalBackendEmailOTPError.requestFailed(detail: urlError.localizedDescription)
+            }
+        } catch {
+            throw LocalBackendEmailOTPError.requestFailed(detail: error.localizedDescription)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LocalBackendEmailOTPError.invalidResponse
+        }
+
+        if httpResponse.statusCode == 422 {
+            throw LocalBackendEmailOTPError.invalidEmail
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw LocalBackendEmailOTPError.unexpectedStatusCode(
+                httpResponse.statusCode,
+                responseBody: responseBodyPreview(from: responseData)
+            )
+        }
+
+        do {
+            let payload = try JSONDecoder().decode(LocalBackendEmailOTPRequestCodeResponsePayload.self, from: responseData)
+            return payload.cooldownSeconds ?? 60
+        } catch {
+            throw LocalBackendEmailOTPError.responseDecodingFailed(detail: error.localizedDescription)
+        }
+    }
+
+    func verifyCode(
+        email: String,
+        code: String,
+        displayName: String?
+    ) async throws -> AuthenticatedAccountPayload {
+        guard let url = configuration.emailVerifyCodeURL else {
+            throw LocalBackendEmailOTPError.baseURLMissing
+        }
+
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedEmail.isEmpty == false else {
+            throw LocalBackendEmailOTPError.invalidEmail
+        }
+
+        let normalizedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedCode.count == 6, normalizedCode.allSatisfy({ $0.isNumber }) else {
+            throw LocalBackendEmailOTPError.invalidCode
+        }
+
+        let requestBody: Data
+        do {
+            let trimmedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            requestBody = try JSONEncoder().encode(
+                LocalBackendEmailOTPVerifyCodeBody(
+                    email: normalizedEmail,
+                    code: normalizedCode,
+                    displayName: trimmedName?.isEmpty == false ? trimmedName : nil
+                )
+            )
+        } catch {
+            throw LocalBackendEmailOTPError.requestEncodingFailed
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = requestBody
+
+        let responseData: Data
+        let response: URLResponse
+
+        do {
+            (responseData, response) = try await session.data(for: request)
+        } catch let urlError as URLError {
+            switch urlError.code {
+            case .cannotConnectToHost, .timedOut, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet:
+                throw LocalBackendEmailOTPError.backendUnavailable
+            default:
+                throw LocalBackendEmailOTPError.requestFailed(detail: urlError.localizedDescription)
+            }
+        } catch {
+            throw LocalBackendEmailOTPError.requestFailed(detail: error.localizedDescription)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LocalBackendEmailOTPError.invalidResponse
+        }
+
+        if httpResponse.statusCode == 401 {
+            throw LocalBackendEmailOTPError.invalidCode
+        }
+
+        if httpResponse.statusCode == 422 {
+            // 后端可能返回 invalidEmail 或 invalidCode，这里统一给用户口径。
+            throw LocalBackendEmailOTPError.invalidCode
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw LocalBackendEmailOTPError.unexpectedStatusCode(
+                httpResponse.statusCode,
+                responseBody: responseBodyPreview(from: responseData)
+            )
+        }
+
+        do {
+            let payload = try JSONDecoder().decode(AuthenticatedAccountPayload.self, from: responseData)
+
+            if payload.accountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw LocalBackendEmailOTPError.requiredFieldMissing(field: "accountId")
+            }
+
+            if payload.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw LocalBackendEmailOTPError.requiredFieldMissing(field: "displayName")
+            }
+
+            if payload.providerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw LocalBackendEmailOTPError.requiredFieldMissing(field: "providerName")
+            }
+
+            guard let token = payload.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  token.isEmpty == false else {
+                throw LocalBackendEmailOTPError.requiredFieldMissing(field: "accessToken")
+            }
+
+            return AuthenticatedAccountPayload(
+                accountId: payload.accountId,
+                displayName: payload.displayName,
+                providerName: payload.providerName,
+                accountHint: payload.accountHint,
+                accessToken: token,
+                activeSpaceId: payload.activeSpaceId
+            )
+        } catch let loginError as LocalBackendEmailOTPError {
+            throw loginError
+        } catch {
+            throw LocalBackendEmailOTPError.responseDecodingFailed(detail: error.localizedDescription)
         }
     }
 
@@ -1969,6 +2232,7 @@ final class AppSyncService: ObservableObject {
     private lazy var realSyncProvider = RealSyncRemoteProvider(accountSessionStore: sessionStore)
     private let localBackendAccountLoginClient: LocalBackendAccountLoginClient
     private let localBackendDemoLoginClient: LocalBackendDemoLoginClient
+    private let localBackendEmailOTPClient: LocalBackendEmailOTPClient
     private let defaults: UserDefaults
     private var cancellables = Set<AnyCancellable>()
     private var remoteSummary: SyncRemotePayloadSummary?
@@ -2010,6 +2274,7 @@ final class AppSyncService: ObservableObject {
         self.remoteProvider = remoteProvider
         self.localBackendAccountLoginClient = LocalBackendAccountLoginClient()
         self.localBackendDemoLoginClient = LocalBackendDemoLoginClient()
+        self.localBackendEmailOTPClient = LocalBackendEmailOTPClient()
         self.defaults = defaults
         self.status = Self.makeStatus(
             session: sessionStore.state,
@@ -2074,6 +2339,45 @@ final class AppSyncService: ObservableObject {
         }
     }
 
+    func requestEmailLoginCode(email: String) async throws -> Int {
+        do {
+            return try await localBackendEmailOTPClient.requestCode(email: email)
+        } catch {
+            throw error
+        }
+    }
+
+    func loginWithEmailOTP(
+        email: String,
+        code: String,
+        displayName: String?
+    ) async throws -> AuthenticatedAccountPayload {
+        isSyncing = true
+        latestErrorText = nil
+        latestEventText = "正在验证验证码"
+        publishStatus()
+
+        do {
+            let payload = try await localBackendEmailOTPClient.verifyCode(
+                email: email,
+                code: code,
+                displayName: displayName
+            )
+            sessionStore.adoptAuthenticatedPayload(payload)
+            latestErrorText = nil
+            latestEventText = "已登录 \(payload.displayName)，当前会话会继续沿用这份账号"
+            isSyncing = false
+            publishStatus()
+            return payload
+        } catch {
+            latestErrorText = error.localizedDescription
+            latestEventText = "这次没有登录成功"
+            isSyncing = false
+            publishStatus()
+            throw error
+        }
+    }
+
     func connectLocalBackendDemoAccount() async {
         isSyncing = true
         latestErrorText = nil
@@ -2096,6 +2400,14 @@ final class AppSyncService: ObservableObject {
     }
 
     func returnToLocalMode() {
+        resetToLocalState(eventText: "已回到本地模式")
+    }
+
+    func logoutCurrentAccount() {
+        resetToLocalState(eventText: "已退出当前账号")
+    }
+
+    private func resetToLocalState(eventText: String) {
         automaticPushTask?.cancel()
         automaticPullTask?.cancel()
         deferredAutomaticApplyTask?.cancel()
@@ -2108,10 +2420,11 @@ final class AppSyncService: ObservableObject {
         lastAppliedRemoteUpdatedAt = nil
         lastDeferredRemoteUpdatedAt = nil
         markPendingAutomaticPush(false)
+        relationshipStore.resetDemo()
         sessionStore.clearSession()
         remoteSummary = nil
         latestPulledPayload = nil
-        latestEventText = "已回到本地模式"
+        latestEventText = eventText
         latestErrorText = nil
         publishStatus()
     }
@@ -3234,10 +3547,10 @@ final class AppSyncService: ObservableObject {
         switch mode {
         case .localOnly:
             summary = "当前仍然使用本地真实数据"
-            detail = "内容仍然优先保存在本机。等账号能力开启后，这里会继续承接云端连接、同步状态和换机恢复。"
+            detail = "内容仍然优先保存在本机。之后如果需要登录账号，这里也会继续承接云端连接、同步状态和换机恢复。"
         case .cloudPrepared:
             summary = relationship.isBound ? "云端准备已经就绪" : "换机恢复准备已经就绪"
-            detail = "当前已经可以承接账号与云端状态；如需联调测试，可在页面下方连接测试环境。"
+            detail = "当前已经可以承接账号与云端状态；如果需要进一步验证，可使用页面下方的额外入口。"
         case .cloudConnected:
             summary = "云端同步已接入"
             detail = "这里会继续统一展示账号状态、同步进度和云端空间连接结果。"
