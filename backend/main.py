@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -47,6 +47,51 @@ app = FastAPI(
     description="最小 PostgreSQL 骨架，当前支撑 login / demo-login / snapshot pull / snapshot push。",
     lifespan=lifespan,
 )
+
+
+@app.get("/privacy")
+async def privacy_policy():
+    """隐私政策页面"""
+    html = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>隐私政策 - 余白</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.8; color: #333; }
+h1 { color: #1a1a1a; border-bottom: 1px solid #eee; padding-bottom: 12px; }
+h2 { color: #1a1a1a; margin-top: 32px; }
+p { margin: 12px 0; }
+.updated { color: #888; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>隐私政策</h1>
+<p class="updated">最后更新：2026年3月22日</p>
+
+<h2>一、信息收集与存储</h2>
+<p>余白（CoupleSpace）是一款面向情侣关系的双人空间应用。当前版本会保存您在应用内主动创建的内容，包括纪念日、生活事项、愿望清单、记忆记录、状态表达和小纸条等。</p>
+<p>这些内容优先以本地数据形式存储在您的设备上。当您登录账号并创建或加入共享空间后，部分内容会进入双人共享作用域。</p>
+
+<h2>二、信息共享</h2>
+<p>我们承诺不会向任何第三方出售、转让或泄露您的个人信息。您在应用内创建的内容仅在您和您的伴侣共享的空间范围内可见。</p>
+<p>如果您选择不登录账号而仅使用本地功能，所有内容将保留在当前设备上。</p>
+
+<h2>三、数据安全</h2>
+<p>我们采取合理的技术手段保护您的数据安全。但请注意，互联网传输存在固有风险，我们无法保证数据在传输过程中完全不被截获。</p>
+
+<h2>四、您的权利</h2>
+<p>您可以随时通过「账号与同步」页面管理登录状态、导出或导入本地备份。在各功能页面中删除的内容将无法恢复。</p>
+
+<h2>五、联系我们</h2>
+<p>如对隐私政策有疑问，请通过应用内「关于我们」页面获取联系方式。</p>
+
+<h2>六、变更通知</h2>
+<p>本政策如有变更，将在应用内通知，并以最新更新日期为准。</p>
+</body>
+</html>"""
+    return HTMLResponse(content=html, media_type="text/html")
 
 
 class APIError(Exception):
