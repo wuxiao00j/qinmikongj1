@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import re
+import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -20,7 +23,7 @@ from starlette.requests import ClientDisconnect
 from backend.auth import verify_password
 from backend.config import settings
 from backend.db import Base, SessionLocal, get_db, get_engine
-from backend.models import Account, MemoryAsset, Space, SpaceMember, SpaceSnapshot
+from backend.models import Account, EmailOTP, MemoryAsset, Space, SpaceMember, SpaceSnapshot
 from backend.seed import seed_database
 
 
@@ -74,6 +77,25 @@ class LoginRequest(BaseModel):
 
     email: str
     password: str
+
+
+class EmailRequestCodeRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    email: str
+
+
+class EmailRequestCodeResponse(BaseModel):
+    ok: bool
+    cooldownSeconds: int
+
+
+class EmailVerifyCodeRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    email: str
+    code: str
+    displayName: str | None = None
 
 
 class CreateSpaceRequest(BaseModel):
@@ -507,6 +529,95 @@ def authenticate_account(session: Session, payload: LoginRequest) -> Account:
         )
 
     return account
+
+
+_EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
+
+def normalize_email_or_raise(raw_email: str) -> str:
+    normalized = raw_email.strip().lower()
+    if normalized and _EMAIL_PATTERN.match(normalized):
+        return normalized
+    raise APIError(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        code="invalid_email",
+        message="邮箱格式不正确。",
+    )
+
+
+def normalize_otp_code_or_raise(raw_code: str) -> str:
+    normalized = raw_code.strip()
+    if normalized.isdigit() and len(normalized) == 6:
+        return normalized
+    raise APIError(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        code="invalid_code",
+        message="验证码格式不正确。",
+    )
+
+
+def email_otp_code_hash(email: str, code: str) -> str:
+    # 仅存 hash，不存明文验证码。
+    digest = hmac.new(
+        key=settings.email_otp_secret.encode("utf-8"),
+        msg=f"{email}:{code}".encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    return digest
+
+
+def generate_email_otp_code() -> str:
+    fixed = settings.email_otp_fixed_code
+    if fixed is not None and fixed.strip():
+        return fixed.strip()
+    # 生产必须随机：000000-999999 6 位补零
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def send_email_otp(email: str, code: str) -> None:
+    # 最小可用闭环：开发环境先写日志；后续再接真实 SMTP。
+    if settings.email_otp_log_plaintext_code:
+        logger.info("email otp delivered email=%s code=%s", email, code)
+    else:
+        logger.info("email otp delivered email=%s", email)
+
+
+def create_unique_account_id(session: Session) -> str:
+    while True:
+        account_id = f"acct_{uuid4().hex}"
+        if session.scalar(select(Account).where(Account.account_id == account_id)) is None:
+            return account_id
+
+
+def create_unique_access_token(session: Session) -> str:
+    while True:
+        token = f"tok_{uuid4().hex}"
+        if session.scalar(select(Account).where(Account.access_token == token)) is None:
+            return token
+
+
+def create_unique_user_id() -> str:
+    return f"user-{uuid4().hex[:12]}"
+
+
+def default_display_name_for_email(email: str) -> str:
+    prefix = email.split("@", 1)[0].strip()
+    return prefix if prefix else "余白用户"
+
+
+def get_recent_email_otp(session: Session, email: str, purpose: str) -> EmailOTP | None:
+    now = utc_now()
+    return session.scalar(
+        select(EmailOTP)
+        .where(
+            EmailOTP.email == email,
+            EmailOTP.purpose == purpose,
+            EmailOTP.consumed_at.is_(None),
+            EmailOTP.expires_at > now,
+        )
+        .order_by(EmailOTP.created_at.desc())
+        .limit(1)
+    )
 
 
 def require_account(
@@ -1629,6 +1740,150 @@ def normalize_space_title(account: Account, raw_title: str | None) -> str:
     if raw_title and raw_title.strip():
         return raw_title.strip()
     return f"{account.display_name} 的共享空间"
+
+
+@app.post("/auth/email/request-code", response_model=EmailRequestCodeResponse)
+async def request_email_code(
+    payload: EmailRequestCodeRequest,
+    request: Request,
+    user_agent: str | None = Header(default=None, alias="User-Agent"),
+    db: Session = Depends(get_db),
+) -> EmailRequestCodeResponse:
+    email = normalize_email_or_raise(payload.email)
+    purpose = "login"
+    now = utc_now()
+
+    last_sent = db.scalar(
+        select(EmailOTP)
+        .where(
+            EmailOTP.email == email,
+            EmailOTP.purpose == purpose,
+        )
+        .order_by(EmailOTP.created_at.desc())
+        .limit(1)
+    )
+    if last_sent is not None:
+        last_sent_at = last_sent.created_at
+        # SQLite (and some DB setups) may return naive datetimes even if the column is configured
+        # with timezone=True. We treat naive values as UTC to keep datetime math consistent.
+        if last_sent_at.tzinfo is None:
+            last_sent_at = last_sent_at.replace(tzinfo=timezone.utc)
+        elapsed = (now - last_sent_at).total_seconds()
+        cooldown = max(0, settings.email_otp_cooldown_seconds - int(elapsed))
+        if cooldown > 0:
+            logger.info(
+                "email otp request rate_limited email=%s cooldown=%s ip=%s",
+                email,
+                cooldown,
+                getattr(request.client, "host", None),
+            )
+            # 通用成功：不暴露账号存在与否，也不暴露是否真的重新发了一条。
+            return EmailRequestCodeResponse(ok=True, cooldownSeconds=cooldown)
+
+    code = generate_email_otp_code()
+    otp = EmailOTP(
+        email=email,
+        code_hash=email_otp_code_hash(email, code),
+        purpose=purpose,
+        expires_at=now + timedelta(seconds=settings.email_otp_ttl_seconds),
+        consumed_at=None,
+        attempt_count=0,
+        ip=getattr(request.client, "host", None),
+        ua=user_agent,
+    )
+    db.add(otp)
+    db.commit()
+
+    # 最小交付：开发环境写日志；生产环境后续接 SMTP。
+    logger.info(
+        "email otp request issued email=%s ttlSeconds=%s ip=%s",
+        email,
+        settings.email_otp_ttl_seconds,
+        getattr(request.client, "host", None),
+    )
+    send_email_otp(email, code)
+    return EmailRequestCodeResponse(ok=True, cooldownSeconds=settings.email_otp_cooldown_seconds)
+
+
+@app.post("/auth/email/verify-code", response_model=AuthenticatedAccountResponse)
+async def verify_email_code(
+    payload: EmailVerifyCodeRequest,
+    request: Request,
+    user_agent: str | None = Header(default=None, alias="User-Agent"),
+    db: Session = Depends(get_db),
+) -> AuthenticatedAccountResponse:
+    email = normalize_email_or_raise(payload.email)
+    code = normalize_otp_code_or_raise(payload.code)
+    purpose = "login"
+
+    otp = get_recent_email_otp(db, email=email, purpose=purpose)
+    if otp is None:
+        logger.info("email otp verify failed email=%s reason=no_active_otp ip=%s", email, getattr(request.client, "host", None))
+        raise APIError(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="invalid_otp",
+            message="验证码无效或已过期，请重新获取。",
+        )
+
+    if otp.attempt_count >= settings.email_otp_max_attempts:
+        logger.info(
+            "email otp verify failed email=%s reason=attempts_exceeded attempts=%s ip=%s",
+            email,
+            otp.attempt_count,
+            getattr(request.client, "host", None),
+        )
+        raise APIError(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="invalid_otp",
+            message="验证码无效或已过期，请重新获取。",
+        )
+
+    if not hmac.compare_digest(otp.code_hash, email_otp_code_hash(email, code)):
+        otp.attempt_count += 1
+        otp.ip = otp.ip or getattr(request.client, "host", None)
+        otp.ua = otp.ua or user_agent
+        db.commit()
+        logger.info(
+            "email otp verify failed email=%s reason=code_mismatch attempts=%s ip=%s",
+            email,
+            otp.attempt_count,
+            getattr(request.client, "host", None),
+        )
+        raise APIError(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="invalid_otp",
+            message="验证码无效或已过期，请重新获取。",
+        )
+
+    otp.consumed_at = utc_now()
+
+    account = db.scalar(
+        select(Account).where(
+            Account.account_hint.is_not(None),
+            Account.account_hint.ilike(email),
+        )
+    )
+
+    if account is None:
+        display_name = (payload.displayName or "").strip()
+        account = Account(
+            account_id=create_unique_account_id(db),
+            display_name=display_name if display_name else default_display_name_for_email(email),
+            provider_name="email_otp",
+            account_hint=email,
+            password_hash=None,
+            access_token=create_unique_access_token(db),
+            current_user_id=create_unique_user_id(),
+            partner_user_id=None,
+        )
+        db.add(account)
+        logger.info("email otp signup email=%s accountId=%s", email, account.account_id)
+    else:
+        account.access_token = create_unique_access_token(db)
+        logger.info("email otp login email=%s accountId=%s", email, account.account_id)
+
+    db.commit()
+    return build_authenticated_account_response(db, account)
 
 
 @app.post("/auth/login", response_model=AuthenticatedAccountResponse)

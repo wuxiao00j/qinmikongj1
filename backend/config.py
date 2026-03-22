@@ -19,6 +19,14 @@ class Settings:
     )
     database_echo: bool = _env_flag("DATABASE_ECHO", default=False)
     seed_on_startup: bool = _env_flag("SEED_ON_STARTUP", default=True)
+    email_otp_secret: str = os.getenv("EMAIL_OTP_SECRET", "dev-email-otp-secret-change-me")
+    email_otp_ttl_seconds: int = int(os.getenv("EMAIL_OTP_TTL_SECONDS", "600"))
+    email_otp_cooldown_seconds: int = int(os.getenv("EMAIL_OTP_COOLDOWN_SECONDS", "60"))
+    email_otp_max_attempts: int = int(os.getenv("EMAIL_OTP_MAX_ATTEMPTS", "5"))
+    # 开发环境可固定验证码，生产环境不要设置该值。
+    email_otp_fixed_code: str | None = os.getenv("EMAIL_OTP_FIXED_CODE")
+    # 开发联调用：允许把明文验证码写到日志里；生产环境应关闭。
+    email_otp_log_plaintext_code: bool = _env_flag("EMAIL_OTP_LOG_PLAINTEXT_CODE", default=True)
     memory_asset_storage_dir: str = os.getenv(
         "MEMORY_ASSET_STORAGE_DIR",
         os.path.join(os.path.dirname(__file__), "storage", "memory_assets"),
